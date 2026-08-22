@@ -178,7 +178,7 @@ npm test                # 代理 / 认证 / 压缩 / 隧道 / 服务 / RPC（43 
 
 ## 🤝 致谢
 
-- 移动端适配移植自 [mexiaosqwq/dsh-web-mobile](https://github.com/mexiaosqwq/dsh-web-mobile)（MIT）
+- 移动端适配移植自本地 fork dsh-web-mobile v2.0.0（upstream [mexiaosqwq/dsh-web-mobile](https://github.com/mexiaosqwq/dsh-web-mobile)，MIT）
 - 公网隧道基于 [cloudflared](https://github.com/cloudflare/cloudflared)
 
 ## 📄 License
