@@ -1,0 +1,5 @@
+vendored-from: ../dsh-web-mobile (local fork)
+fork-commit: 0d103973c624d2add832b8b96c498ecc45e458a0 (main)
+version: 2.0.0
+date: 2026-08-22
+upstream: mexiaosqwq/dsh-web-mobile (MIT)

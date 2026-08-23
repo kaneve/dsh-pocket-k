@@ -31,13 +31,13 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 // client/index.jsx
 var index_exports = {};
 __export(index_exports, {
-  apply: () => apply,
+  apply: () => apply2,
   inject: () => inject,
   name: () => name,
   redactStatus: () => redactStatus
 });
 module.exports = __toCommonJS(index_exports);
-var import_react2 = require("react");
+var import_react = require("react");
 
 // client/api.js
 var POCKET_RPC_CHANNEL = "/dsh-pocket";
@@ -95,15 +95,612 @@ function redactStatus(s) {
   };
 }
 
-// client/mobile/MobileNavToggle.tsx
+// client/mobile/components/MobileNavToggle.tsx
 var import_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");
+
+// client/mobile/core/reconciler-core.ts
+function createReconcilerCore(options) {
+  const onError = options.onError ?? ((taskName, error, phase) => {
+    console.error(
+      `[dsh-mobile-nav] reconciler task ${taskName}${phase === "dispose" ? " dispose" : ""} failed`,
+      error
+    );
+  });
+  const registered = /* @__PURE__ */ new Set();
+  let active = null;
+  let dirty = /* @__PURE__ */ new Set();
+  let forceAll = false;
+  let pending = null;
+  const runEnsure = (task) => {
+    try {
+      task.ensure();
+    } catch (error) {
+      onError(task.name, error, "ensure");
+    }
+  };
+  const runDispose = (task) => {
+    try {
+      task.dispose();
+    } catch (error) {
+      onError(task.name, error, "dispose");
+    }
+  };
+  const flush = () => {
+    if (pending !== null) {
+      pending();
+      pending = null;
+    }
+    if (active === null) {
+      dirty.clear();
+      forceAll = false;
+      return;
+    }
+    if (forceAll) {
+      for (const task of active) runEnsure(task);
+    } else if (dirty.size > 0) {
+      for (const task of active) {
+        const scopes = task.scopes;
+        if (scopes === void 0 || scopes.some((key) => dirty.has(key))) runEnsure(task);
+      }
+    }
+    dirty.clear();
+    forceAll = false;
+  };
+  const schedule = () => {
+    if (pending !== null) return;
+    pending = options.requestFrame(() => {
+      pending = null;
+      flush();
+    });
+  };
+  const register = (task) => {
+    registered.add(task);
+    if (active !== null) {
+      active.add(task);
+      runEnsure(task);
+    }
+    return () => {
+      registered.delete(task);
+      if (active !== null) {
+        active.delete(task);
+        runDispose(task);
+      }
+    };
+  };
+  const activate = () => {
+    if (active !== null) return;
+    active = new Set(registered);
+    forceAll = true;
+    flush();
+  };
+  const deactivate = () => {
+    if (pending !== null) {
+      pending();
+      pending = null;
+    }
+    dirty.clear();
+    forceAll = false;
+    if (active !== null) {
+      const snapshot = active;
+      active = null;
+      for (const task of snapshot) runDispose(task);
+    }
+  };
+  return {
+    get size() {
+      return registered.size;
+    },
+    register,
+    activate,
+    deactivate,
+    note: (keys) => {
+      for (const key of keys) dirty.add(key);
+      schedule();
+    },
+    flush
+  };
+}
+
+// client/mobile/effects/aionui-compat.ts
+function installAionuiCompat(ctx) {
+  installMobileEffect(ctx, "dsh-mobile-nav: aionui explorer close marker", () => {
+    const onChevronClick = (event) => {
+      const target = event.target;
+      if (target === null || !target.closest(".aionui-collapse-chevron")) return;
+      getFrame()?.removeAttribute("data-aionui-explorer-open");
+    };
+    document.addEventListener("click", onChevronClick, true);
+    return () => document.removeEventListener("click", onChevronClick, true);
+  });
+  installMobileEffect(ctx, "dsh-mobile-nav: preview sheet open marker", () => {
+    const closePreview = () => {
+      getFrame()?.removeAttribute("data-aionui-preview-open");
+      getFrame()?.removeAttribute("data-mobile-preview-full");
+    };
+    const onTap = (event) => {
+      const target = event.target;
+      if (target === null) return;
+      const row = target.closest('[data-aionui-explorer-col] [class*="_treeRow"]');
+      if (row === null) return;
+      if (row.querySelector('[class*="_treeArrow"]:not([class*="_treeArrowEmpty"])') !== null) return;
+      getFrame()?.setAttribute("data-aionui-preview-open", "");
+    };
+    const onCollapse = (event) => {
+      const target = event.target;
+      if (target === null) return;
+      if (target.closest('[data-aionui-preview-col] [class$="_panelCollapse"]') !== null) {
+        closePreview();
+      }
+    };
+    document.addEventListener("click", onTap, true);
+    document.addEventListener("click", onCollapse, true);
+    return () => {
+      document.removeEventListener("click", onTap, true);
+      document.removeEventListener("click", onCollapse, true);
+    };
+  });
+}
+function createPreviewCloseTask() {
+  return {
+    name: "preview-close-sync",
+    // Only acts when the suite hides the col via inline style. Deliberately
+    // NOT scoped to data-aionui-preview-open: our own open marker is set
+    // before the suite necessarily flips its inline visibility, so waking on
+    // that marker would read the still-hidden style as a "suite close" and
+    // immediately undo the file-row tap.
+    scopes: ["style"],
+    ensure: () => {
+      const pv = document.querySelector("[data-aionui-preview-col]");
+      if (pv === null) return;
+      if (pv.style.visibility === "hidden") {
+        getFrame()?.removeAttribute("data-aionui-preview-open");
+        getFrame()?.removeAttribute("data-mobile-preview-full");
+      }
+    },
+    dispose: () => {
+    }
+  };
+}
+function createSheetRiseTask() {
+  const cols = ["[data-aionui-explorer-col]", "[data-aionui-preview-col]"];
+  const seen = /* @__PURE__ */ new Map();
+  const play = (el) => {
+    el.animate(
+      [
+        { opacity: 0, transform: "translateY(28px)" },
+        { opacity: 1, transform: "none" }
+      ],
+      { duration: 280, easing: "cubic-bezier(.16, 1, .3, 1)", fill: "backwards" }
+    );
+  };
+  return {
+    name: "sheet-rise-replay",
+    // The flush runs on the next frame, by which time React has rendered the
+    // opened col, so the frame markers / inline style / class changes are
+    // reliable triggers — no '*'.
+    scopes: [
+      "style",
+      "class",
+      "data-aionui-explorer-open",
+      "data-aionui-preview-open",
+      "data-mobile-preview-full"
+    ],
+    ensure: () => {
+      for (const sel of cols) {
+        const el = document.querySelector(sel);
+        if (el === null) continue;
+        const visible = getComputedStyle(el).visibility === "visible";
+        const prev = seen.get(sel) ?? false;
+        if (visible && !prev) play(el);
+        seen.set(sel, visible);
+      }
+    },
+    dispose: () => {
+      seen.clear();
+    }
+  };
+}
+
+// client/mobile/effects/stats-line.ts
+function createStatsLineTask() {
+  let tpsOrigin = null;
+  const moveTps = (stats) => {
+    if ([...stats.children].some((c) => /^TPS\s+\d/.test((c.textContent ?? "").trim()))) return;
+    const stack = stats.closest('[class$="_composerStack"]');
+    if (stack === null) return;
+    for (const el of stack.querySelectorAll("div")) {
+      const text = (el.textContent ?? "").trim();
+      if (!/^TPS\s+\d/.test(text)) continue;
+      if (el.children.length > 0) continue;
+      if (el.parentElement !== null) {
+        tpsOrigin = { parent: el.parentElement, next: el.nextSibling };
+      }
+      stats.appendChild(el);
+      return;
+    }
+  };
+  const mark = () => {
+    for (const root of document.querySelectorAll('[data-phase] [class*="_root"]')) {
+      if (root.closest('[class$="_composerStack"]') === null) continue;
+      if (root.matches('[data-testid="todo-panel"]')) continue;
+      if (root.querySelector("button") !== null) continue;
+      const text = root.textContent ?? "";
+      if (!/(turns|steps|\bLLM\b|轮|步)/.test(text)) continue;
+      if (root.querySelector("textarea") !== null) continue;
+      root.setAttribute("data-mobile-nav", "stats");
+      moveTps(root);
+      return;
+    }
+  };
+  return {
+    name: "stats-line",
+    scopes: ["*"],
+    ensure: mark,
+    dispose: () => {
+      if (tpsOrigin !== null && tpsOrigin.parent.isConnected) {
+        for (const stats of document.querySelectorAll('[data-mobile-nav="stats"]')) {
+          const tps = [...stats.querySelectorAll("div")].find(
+            (el) => el.children.length === 0 && /^TPS\s+\d/.test((el.textContent ?? "").trim())
+          );
+          if (tps !== void 0) {
+            tpsOrigin.parent.insertBefore(tps, tpsOrigin.next);
+            break;
+          }
+        }
+      }
+      for (const el of document.querySelectorAll('[data-mobile-nav="stats"]')) {
+        el.removeAttribute("data-mobile-nav");
+      }
+      tpsOrigin = null;
+    }
+  };
+}
+
+// client/mobile/effects/preview-fullscreen.ts
+function createPreviewFullscreenTask(t) {
+  let button = null;
+  const syncLabel = (target) => {
+    const full = getFrame()?.hasAttribute("data-mobile-preview-full") ?? false;
+    const label = t(full ? "previewExitFullscreen" : "previewFullscreen");
+    if (target.getAttribute("aria-label") === label) return;
+    target.setAttribute("aria-label", label);
+    target.title = label;
+  };
+  const onClick = () => {
+    getFrame()?.toggleAttribute("data-mobile-preview-full");
+    if (button !== null) syncLabel(button);
+  };
+  return {
+    name: "preview-fullscreen-toggle",
+    scopes: ["data-aionui-preview-open", "data-mobile-preview-full"],
+    ensure: () => {
+      const col = document.querySelector("[data-aionui-preview-col]");
+      if (col === null) return;
+      if (button === null) {
+        button = document.createElement("button");
+        button.type = "button";
+        button.dataset.mobileNav = "preview-full-toggle";
+        button.innerHTML = [
+          '<svg class="dsh-mobile-nav-full-in" viewBox="0 0 16 16" fill="none" aria-hidden="true">',
+          '<path d="M6 2H2v4M10 2h4v4M6 14H2v-4M10 14h4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
+          "</svg>",
+          '<svg class="dsh-mobile-nav-full-out" viewBox="0 0 16 16" fill="none" aria-hidden="true">',
+          '<path d="M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
+          "</svg>"
+        ].join("");
+        button.addEventListener("click", onClick);
+      }
+      syncLabel(button);
+      if (button.parentElement !== col) col.appendChild(button);
+    },
+    dispose: () => {
+      button?.remove();
+      button = null;
+    }
+  };
+}
+
+// client/mobile/effects/git-chip-reparent.ts
+function createGitChipTask() {
+  return {
+    name: "git-chip-reparent",
+    scopes: ["*"],
+    ensure: () => {
+      const chip = document.querySelector('[data-slot="conversation.input.dock"] [data-gitgraph-chip-anchor]');
+      if (chip === null) return;
+      const card = document.querySelector("textarea")?.closest('[class$="_card"]');
+      if (card == null) return;
+      if (chip.parentElement !== card) card.insertBefore(chip, card.firstChild);
+    },
+    dispose: () => {
+      const chip = document.querySelector('[data-slot="conversation.input.dock"] [data-gitgraph-chip-anchor]');
+      const dock = document.querySelector('[data-slot="conversation.input.dock"]');
+      if (chip !== null && dock !== null && chip.parentElement !== dock) dock.appendChild(chip);
+    }
+  };
+}
+
+// client/mobile/effects/settings-toolbar-reparent.ts
+function createSettingsToolbarTask() {
+  let origin = null;
+  return {
+    name: "settings-toolbar-reparent",
+    scopes: ["*"],
+    ensure: () => {
+      const dialog = document.querySelector('[aria-modal="true"]');
+      if (dialog === null) return;
+      const nav = dialog.querySelector(':scope > [class$="_nav"]');
+      const header = dialog.querySelector('[class$="_header"]');
+      if (nav === null || header === null) return;
+      if (header.parentElement === nav) return;
+      if (header.parentElement !== null) {
+        origin = { parent: header.parentElement, next: header.nextSibling };
+      }
+      nav.appendChild(header);
+    },
+    dispose: () => {
+      if (origin === null) return;
+      const header = document.querySelector('[aria-modal="true"] [class$="_header"]');
+      if (header !== null && origin.parent.isConnected) {
+        origin.parent.insertBefore(header, origin.next);
+      }
+      origin = null;
+    }
+  };
+}
+
+// client/mobile/effects/overlay-backdrop-fab.ts
+function createOverlayTask(t, toggleSidebar) {
+  let backdrop = null;
+  let fab = null;
+  const drawerOpen = () => {
+    const frame = getFrame();
+    return frame !== null && !frame.hasAttribute("data-sidebar-collapsed");
+  };
+  const heroPhase = () => document.querySelector('[data-phase="active"]') === null;
+  return {
+    name: "overlay-backdrop-fab",
+    scopes: ["*", "data-sidebar-collapsed", "data-phase"],
+    ensure: () => {
+      const frame = getFrame();
+      if (frame === null) return;
+      if (drawerOpen() && backdrop === null) {
+        backdrop = document.createElement("div");
+        backdrop.dataset.mobileNav = "backdrop";
+        backdrop.setAttribute("role", "button");
+        backdrop.setAttribute("aria-label", t("backdrop"));
+        backdrop.addEventListener("click", toggleSidebar);
+        frame.appendChild(backdrop);
+      } else if (!drawerOpen() && backdrop !== null) {
+        backdrop.remove();
+        backdrop = null;
+      }
+      if (heroPhase() && !drawerOpen() && fab === null) {
+        fab = document.createElement("button");
+        fab.type = "button";
+        fab.dataset.mobileNav = "fab";
+        fab.setAttribute("aria-label", t("open"));
+        fab.title = t("open");
+        fab.innerHTML = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true" width="18" height="18"><path fill-rule="evenodd" clip-rule="evenodd" d="M9.67272 0.522841C10.8339 0.522841 11.76 0.522714 12.4963 0.602493C13.2453 0.683657 13.8789 0.854248 14.4264 1.25197C14.7504 1.48739 15.0355 1.77247 15.2709 2.0965C15.6686 2.64394 15.8392 3.27758 15.9204 4.02655C16.0002 4.7629 16 5.68895 16 6.85014V9.14986C16 10.3111 16.0002 11.2371 15.9204 11.9735C15.8392 12.7224 15.6686 13.3561 15.2709 13.9035C15.0355 14.2275 14.7504 14.5126 14.4264 14.748C13.8789 15.1458 13.2453 15.3163 12.4963 15.3975C11.76 15.4773 10.8339 15.4772 9.67272 15.4772H6.3273C5.16611 15.4772 4.24006 15.4773 3.50371 15.3975C2.75474 15.3163 2.1211 15.1458 1.57366 14.748C1.24963 14.5126 0.964549 14.2275 0.729131 13.9035C0.331407 13.3561 0.160817 12.7224 0.0796529 11.9735C-0.000126137 11.2371 1.25338e-09 10.3111 1.25338e-09 9.14986V6.85014C1.25329e-09 5.68895 -0.000126137 4.7629 0.0796529 4.02655C0.160817 3.27758 0.331407 2.64394 0.729131 2.0965C0.964549 1.77247 1.24963 1.48739 1.57366 1.25197C2.1211 0.854248 2.75474 0.683657 3.50371 0.602493C4.24006 0.522714 5.16611 0.522841 6.3273 0.522841H9.67272ZM5.54303 1.88715V14.1118C5.78636 14.1128 6.04709 14.1169 6.3273 14.1169H9.67272C10.8639 14.1169 11.7032 14.1164 12.3493 14.0465C12.9824 13.9779 13.3497 13.8494 13.6268 13.6482C13.8354 13.4966 14.0195 13.3125 14.1711 13.1039C14.3723 12.8268 14.5007 12.4595 14.5693 11.8264C14.6393 11.1803 14.6398 10.341 14.6398 9.14986V6.85014C14.6398 5.65896 14.6393 4.81967 14.5693 4.1736C14.5007 3.54048 14.3723 3.17318 14.1711 2.89609C14.0195 2.68747 13.8354 2.50337 13.6268 2.35179C13.3497 2.1506 12.9824 2.02212 12.3493 1.95353C11.7032 1.88358 10.8639 1.88307 9.67272 1.88307H6.3273C6.04709 1.88307 5.78636 1.8862 5.54303 1.88715ZM4.1828 1.91166C3.99125 1.9216 3.8148 1.93577 3.65076 1.95353C3.01764 2.02212 2.65034 2.1506 2.37325 2.35179C2.16463 2.50337 1.98052 2.68747 1.82895 2.89609C1.62776 3.17318 1.49928 3.54048 1.43069 4.1736C1.36074 4.81967 1.36023 5.65896 1.36023 6.85014V9.14986C1.36023 10.341 1.36074 11.1803 1.43069 11.8264C1.49928 12.4595 1.62776 12.8268 1.82895 13.1039C1.98052 13.3125 2.16463 13.4966 2.37325 13.6482C2.65034 13.8494 3.01764 13.9779 3.65076 14.0465C4.29683 14.1164 5.13612 14.1169 6.3273 14.1169H9.67272C10.8639 14.1169 11.7032 14.1164 12.3493 14.0465C12.9824 13.9779 13.3497 13.8494 13.6268 13.6482C13.8354 13.4966 14.0195 13.3125 14.1711 13.1039C14.3723 12.8268 14.5007 12.4595 14.5693 11.8264C14.6393 11.1803 14.6398 10.341 14.6398 9.14986V6.85014C14.6398 5.65896 14.6393 4.81967 14.5693 4.1736C14.5007 3.54048 14.3723 3.17318 14.1711 2.89609C14.0195 2.68747 13.8354 2.50337 13.6268 2.35179C13.3497 2.1506 12.9824 2.02212 12.3493 1.95353C11.7032 1.88358 10.8639 1.88307 9.67272 1.88307H6.3273C5.13612 1.88307 4.29683 1.88358 3.65076 1.95353C3.47672 1.97129 3.30027 1.98546 3.10872 1.9954L4.1828 1.91166Z" fill="currentColor"/></svg>';
+        fab.addEventListener("click", toggleSidebar);
+        frame.appendChild(fab);
+      } else if ((!heroPhase() || drawerOpen()) && fab !== null) {
+        fab.remove();
+        fab = null;
+      }
+    },
+    dispose: () => {
+      backdrop?.remove();
+      backdrop = null;
+      fab?.remove();
+      fab = null;
+    }
+  };
+}
+
+// client/mobile/effects/phone-chrome.ts
+var NS = "mobileNav";
+var MOBILE_QUERY = "(max-width: 1023px)";
+function installMobileEffect(ctx, label, install) {
+  ctx.effect(() => {
+    const narrow = window.matchMedia(MOBILE_QUERY);
+    let cleanup;
+    const arm = () => {
+      cleanup?.();
+      cleanup = narrow.matches ? install(narrow) : void 0;
+    };
+    arm();
+    narrow.addEventListener("change", arm);
+    return () => {
+      narrow.removeEventListener("change", arm);
+      cleanup?.();
+    };
+  }, label);
+}
+function findFrame() {
+  return document.querySelector("[data-shell-overlay]")?.parentElement ?? null;
+}
+function getFrame() {
+  return document.querySelector('[data-mobile-nav="frame"]') ?? findFrame();
+}
+function installFrameController() {
+  if (frameControllerInstalled) return () => {
+  };
+  frameControllerInstalled = true;
+  let frame = null;
+  const removeTask = addReconcilerTask({
+    name: "frame-marker",
+    scopes: ["*"],
+    ensure: () => {
+      frame = findFrame();
+      if (frame !== null && !frame.hasAttribute("data-mobile-nav")) {
+        frame.setAttribute("data-mobile-nav", "frame");
+      }
+    },
+    dispose: () => {
+      if (frame !== null) {
+        frame.removeAttribute("data-mobile-nav");
+        frame.removeAttribute("data-mobile-preview-full");
+        frame.removeAttribute("data-aionui-explorer-open");
+        frame.removeAttribute("data-aionui-preview-open");
+      }
+      frame = null;
+    }
+  });
+  return () => {
+    removeTask();
+    frameControllerInstalled = false;
+  };
+}
+var frameControllerInstalled = false;
+var reconcileTasksRegistered = false;
+var reconcilerInstalled = false;
+var core = createReconcilerCore({
+  requestFrame: (flush) => {
+    let id = 0;
+    const run = () => {
+      id = 0;
+      flush();
+    };
+    id = requestAnimationFrame(run);
+    return () => {
+      if (id !== 0) cancelAnimationFrame(id);
+    };
+  }
+});
+function installReconciler(ctx) {
+  if (reconcilerInstalled) return () => {
+  };
+  reconcilerInstalled = true;
+  installMobileEffect(ctx, "dsh-mobile-nav: DOM reconciler", () => {
+    const observer = new MutationObserver((records) => {
+      const keys = /* @__PURE__ */ new Set();
+      for (const record of records) {
+        keys.add(
+          record.type === "attributes" && record.attributeName !== null ? record.attributeName : "*"
+        );
+      }
+      core.note(keys);
+    });
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: [
+        "style",
+        "class",
+        "data-phase",
+        "data-sidebar-collapsed",
+        "data-aionui-explorer-open",
+        "data-aionui-preview-open",
+        "data-mobile-preview-full"
+      ]
+    });
+    core.activate();
+    return () => {
+      observer.disconnect();
+      core.deactivate();
+    };
+  });
+  return () => {
+    reconcilerInstalled = false;
+  };
+}
+function addReconcilerTask(task) {
+  return core.register(task);
+}
+function installPhoneChrome(ctx) {
+  installMobileEffect(ctx, "dsh-mobile-nav: status bar theme + viewport + zoom guard", () => {
+    const viewport = document.querySelector('meta[name="viewport"]');
+    const originalViewport = viewport?.content ?? "";
+    const themeMeta = document.createElement("meta");
+    themeMeta.name = "theme-color";
+    const bodyBg = () => getComputedStyle(document.body).backgroundColor;
+    const sync = () => {
+      if (viewport !== null) viewport.content = "width=device-width, initial-scale=1, viewport-fit=cover";
+      themeMeta.content = bodyBg();
+      if (themeMeta.parentElement === null) document.head.appendChild(themeMeta);
+    };
+    const restore = () => {
+      if (viewport !== null) viewport.content = originalViewport;
+      themeMeta.remove();
+    };
+    const onGestureStart = (event) => event.preventDefault();
+    const observer = new MutationObserver(() => {
+      themeMeta.content = bodyBg();
+    });
+    observer.observe(document.body, { attributes: true, attributeFilter: ["data-ds-dark-theme"] });
+    document.addEventListener("gesturestart", onGestureStart);
+    sync();
+    return () => {
+      observer.disconnect();
+      document.removeEventListener("gesturestart", onGestureStart);
+      restore();
+    };
+  });
+}
+function installOverlayInteractions(ctx) {
+  installMobileEffect(ctx, "dsh-mobile-nav: drawer close (Escape + navigate)", () => {
+    const toggleSidebar = () => ctx.layout.toggleSidebar();
+    const drawerOpen = () => {
+      const frame = getFrame();
+      return frame !== null && !frame.hasAttribute("data-sidebar-collapsed");
+    };
+    const onKeyDown = (event) => {
+      if (event.key !== "Escape") return;
+      if (document.querySelector('[aria-modal="true"]') !== null) return;
+      if (drawerOpen()) toggleSidebar();
+    };
+    const onDrawerClick = (event) => {
+      if (document.querySelector('[aria-modal="true"]') !== null) return;
+      if (!drawerOpen()) return;
+      const target = event.target;
+      if (target === null) return;
+      const drawer = document.querySelector('[data-mobile-nav="frame"] > :first-child');
+      if (drawer === null || !drawer.contains(target)) return;
+      if (target.closest('[class*="sessionRow"] button') !== null) return;
+      const navigates = target.closest(
+        'button[data-dsh-taskboard-entry], button[data-dsh-ssh-entry], [class*="newSession"], [class*="sessionRow"], [class*="searchResultRow"], [class*="searchResultWorkspace"]'
+      );
+      if (navigates !== null) toggleSidebar();
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    document.addEventListener("click", onDrawerClick, true);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown, true);
+      document.removeEventListener("click", onDrawerClick, true);
+    };
+  });
+}
+function registerReconcileTasks(ctx) {
+  if (reconcileTasksRegistered) return () => {
+  };
+  reconcileTasksRegistered = true;
+  const t = ctx.locale.bind(NS);
+  const removeTasks = [
+    addReconcilerTask(createPreviewFullscreenTask(t)),
+    addReconcilerTask(createGitChipTask()),
+    addReconcilerTask(createSettingsToolbarTask()),
+    addReconcilerTask(createPreviewCloseTask()),
+    addReconcilerTask(createSheetRiseTask()),
+    addReconcilerTask(createStatsLineTask()),
+    addReconcilerTask(createOverlayTask(t, () => ctx.layout.toggleSidebar()))
+  ];
+  return () => {
+    for (const remove of removeTasks) remove();
+    reconcileTasksRegistered = false;
+  };
+}
+
+// client/mobile/components/MobileNavToggle.tsx
 function MobileNavToggle({ toggleSidebar, t }) {
   const toggleExplorer = () => {
-    const frame = document.querySelector('[data-mobile-nav="frame"]');
+    const frame = getFrame();
     if (frame === null) return;
     if (frame.hasAttribute("data-aionui-explorer-open")) {
       frame.removeAttribute("data-aionui-explorer-open");
     } else {
+      frame.removeAttribute("data-aionui-preview-open");
       frame.setAttribute("data-aionui-explorer-open", "");
     }
   };
@@ -130,119 +727,13 @@ function MobileNavToggle({ toggleSidebar, t }) {
   ));
 }
 
-// client/mobile/MobileNavOverlay.tsx
-var import_react = require("react");
+// client/mobile/components/MobileDrawerFooter.tsx
 var import_dsh_client_ui_primitives2 = require("@deepseek-ai/dsh-client-ui-primitives");
-var MOBILE_QUERY = "(max-width: 1023px)";
-function useMobile() {
-  const [mobile, setMobile] = (0, import_react.useState)(() => window.matchMedia(MOBILE_QUERY).matches);
-  (0, import_react.useEffect)(() => {
-    const query = window.matchMedia(MOBILE_QUERY);
-    const onChange = (event) => setMobile(event.matches);
-    query.addEventListener("change", onChange);
-    return () => query.removeEventListener("change", onChange);
-  }, []);
-  return mobile;
-}
-function findFrame() {
-  return document.querySelector("[data-shell-overlay]")?.parentElement ?? null;
-}
-function MobileNavOverlay({ toggleSidebar, t }) {
-  const mobile = useMobile();
-  const [open, setOpen] = (0, import_react.useState)(false);
-  const [fabVisible, setFabVisible] = (0, import_react.useState)(false);
-  (0, import_react.useLayoutEffect)(() => {
-    if (!mobile) {
-      setOpen(false);
-      return;
-    }
-    const frame = findFrame();
-    if (frame === null) return;
-    frame.setAttribute("data-mobile-nav", "frame");
-    const sync = () => setOpen(!frame.hasAttribute("data-sidebar-collapsed"));
-    sync();
-    const observer = new MutationObserver(sync);
-    observer.observe(frame, { attributes: true, attributeFilter: ["data-sidebar-collapsed"] });
-    return () => {
-      observer.disconnect();
-      frame.removeAttribute("data-mobile-nav");
-    };
-  }, [mobile]);
-  (0, import_react.useEffect)(() => {
-    if (!mobile) {
-      setFabVisible(false);
-      return;
-    }
-    const sync = () => setFabVisible(document.querySelector('[data-phase="active"]') === null);
-    sync();
-    const observer = new MutationObserver(sync);
-    observer.observe(document.documentElement, {
-      subtree: true,
-      childList: true,
-      attributes: true,
-      attributeFilter: ["data-phase"]
-    });
-    return () => observer.disconnect();
-  }, [mobile]);
-  (0, import_react.useEffect)(() => {
-    if (!mobile || !open) return;
-    const onKeyDown = (event) => {
-      if (event.key === "Escape" && document.querySelector('[aria-modal="true"]') === null) toggleSidebar();
-    };
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => document.removeEventListener("keydown", onKeyDown, true);
-  }, [mobile, open, toggleSidebar]);
-  (0, import_react.useEffect)(() => {
-    if (!mobile || !open) return;
-    const onDrawerClick = (event) => {
-      if (document.querySelector('[aria-modal="true"]') !== null) return;
-      const target = event.target;
-      if (target === null) return;
-      const drawer = document.querySelector('[data-mobile-nav="frame"] > :first-child');
-      if (drawer === null || !drawer.contains(target)) return;
-      if (target.closest('[class*="sessionRow"] button') !== null) return;
-      const navigates = target.closest(
-        'button[data-dsh-taskboard-entry], button[data-dsh-ssh-entry], [class*="newSession"], [class*="sessionRow"], [class*="searchResultRow"], [class*="searchResultWorkspace"]'
-      );
-      if (navigates !== null) toggleSidebar();
-    };
-    document.addEventListener("click", onDrawerClick, true);
-    return () => document.removeEventListener("click", onDrawerClick, true);
-  }, [mobile, open, toggleSidebar]);
-  (0, import_react.useEffect)(() => {
-    if (!mobile || !open) return;
-    const onOutsideClick = (event) => {
-      if (document.querySelector('[aria-modal="true"]') !== null) return;
-      const target = event.target;
-      if (target === null) return;
-      if (target.closest('[data-mobile-nav="toggle"]') !== null) return;
-      const drawer = document.querySelector('[data-mobile-nav="frame"] > :first-child');
-      if (drawer !== null && drawer.contains(target)) return;
-      toggleSidebar();
-    };
-    document.addEventListener("click", onOutsideClick, true);
-    return () => document.removeEventListener("click", onOutsideClick, true);
-  }, [mobile, open, toggleSidebar]);
-  if (!mobile) return null;
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, open && /* @__PURE__ */ React.createElement("div", { "data-mobile-nav": "backdrop" }), fabVisible && !open && /* @__PURE__ */ React.createElement(
-    "button",
-    {
-      type: "button",
-      "data-mobile-nav": "fab",
-      "aria-label": t("open"),
-      title: t("open"),
-      onClick: () => toggleSidebar()
-    },
-    /* @__PURE__ */ React.createElement(import_dsh_client_ui_primitives2.IconPanelLeftOutline16, { size: 18 })
-  ));
-}
-
-// client/mobile/MobileDrawerFooter.tsx
-var import_dsh_client_ui_primitives3 = require("@deepseek-ai/dsh-client-ui-primitives");
 function MobileDrawerFooter({ useSessions, downloadSessionLog, toggleSidebar, t }) {
   const sessionId = useSessions((state) => state.current);
   const openExplorer = () => {
-    document.querySelector('[data-mobile-nav="frame"]')?.setAttribute("data-aionui-explorer-open", "");
+    getFrame()?.removeAttribute("data-aionui-preview-open");
+    getFrame()?.setAttribute("data-aionui-explorer-open", "");
     toggleSidebar();
   };
   return /* @__PURE__ */ React.createElement("div", { "data-mobile-nav": "drawer-actions" }, /* @__PURE__ */ React.createElement(
@@ -254,7 +745,7 @@ function MobileDrawerFooter({ useSessions, downloadSessionLog, toggleSidebar, t 
       title: t("files"),
       onClick: openExplorer
     },
-    /* @__PURE__ */ React.createElement(import_dsh_client_ui_primitives3.IconPanelLeftOutline16, { size: 14 }),
+    /* @__PURE__ */ React.createElement(import_dsh_client_ui_primitives2.IconPanelLeftOutline16, { size: 14 }),
     /* @__PURE__ */ React.createElement("span", null, t("files"))
   ), /* @__PURE__ */ React.createElement(
     "button",
@@ -268,13 +759,13 @@ function MobileDrawerFooter({ useSessions, downloadSessionLog, toggleSidebar, t 
         if (sessionId !== void 0) downloadSessionLog(sessionId);
       }
     },
-    /* @__PURE__ */ React.createElement(import_dsh_client_ui_primitives3.IconDownloadOutline16, { size: 14 }),
+    /* @__PURE__ */ React.createElement(import_dsh_client_ui_primitives2.IconDownloadOutline16, { size: 14 }),
     /* @__PURE__ */ React.createElement("span", null, t("sessionLog"))
   ));
 }
 
-// client/mobile/mobile.css.ts
-var MOBILE_CSS = `
+// client/mobile/styles/base.css.ts
+var BASE_CSS = `
 /* ---------- base control styles (rendered at any width, hidden where unused) ---------- */
 
 [data-mobile-nav="toggle"],
@@ -367,16 +858,16 @@ var MOBILE_CSS = `
   outline-offset: 2px;
 }
 
-/* Dimmed backdrop under the open drawer; above every column, below the drawer.
-   pointer-events: none \u2014\u2014 \u70B9\u51FB\u7A7F\u900F\uFF08issue #38\uFF09\uFF1Abackdrop \u53EA\u8D1F\u8D23\u89C6\u89C9\u538B\u6697\uFF0C
-   \u4E0D\u62A2\u70B9\u51FB\u3002\u5173\u95ED\u62BD\u5C49\u6539\u7531 MobileNavOverlay \u7684 document \u7EA7\u300C\u62BD\u5C49\u5916\u70B9\u51FB\u300D\u76D1\u542C\u5904\u7406
-   \uFF08\u7B49\u4EF7\u4E8E\u539F\u6765\u7684\u70B9\u51FB\u906E\u7F69\u5173\u95ED\uFF0C\u4E14\u62BD\u5C49\u5185\u70B9\u51FB\u4E0D\u518D\u88AB backdrop \u5403\u6389\uFF09\u3002 */
+/* Dimmed backdrop under the open drawer; above every column, below the drawer. */
 [data-mobile-nav="backdrop"] {
   position: absolute;
   inset: 0;
-  z-index: 30;
+  /* dsh-pocket \u79FB\u690D\u4E0A\u6E38 PR#42 \u914D\u5957\uFF1A\u62BD\u5C49\u5DF2\u62AC\u81F3 600\uFF08\u9AD8\u4E8E\u7B2C\u4E09\u65B9 !important \u62AC\u5347\u7684
+     shell overlay z500\uFF09\uFF0C\u80CC\u677F\u987B\u540C\u6B65\u4FDD\u6301\u5728\u62BD\u5C49\u4E4B\u4E0B\u3001\u62AC\u5347 overlay \u4E4B\u4E0A\uFF0C\u5426\u5219\u5916\u4FA7
+   * \u70B9\u51FB\u4F1A\u88AB\u76D6\u4F4F\u7684\u63D2\u4EF6\u5C42\u622A\u80E1\u3001\u538B\u6697\u5C42\u4E5F\u4F1A\u88AB\u7A7F\u5E2E\u3002590 = (500,600) \u533A\u95F4\u3002 */
+  z-index: 590;
   background: rgba(0, 0, 0, .45);
-  pointer-events: none;
+  cursor: pointer;
   animation: dsh-mobile-nav-fade .2s var(--ds-ease-in-out, ease-in-out);
   -webkit-tap-highlight-color: transparent;
 }
@@ -408,7 +899,10 @@ var MOBILE_CSS = `
   }
 }
 
-/* ---------- mobile-only layout ---------- */
+`;
+
+// client/mobile/styles/layout.css.ts
+var LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
 
 @media (max-width: 1023px) {
   /* --- Phone chrome ---
@@ -439,16 +933,6 @@ var MOBILE_CSS = `
     padding-top: env(safe-area-inset-top, 0px) !important;
   }
 
-  /* \u4E3B\u5185\u5BB9\u5217\uFF08\u7B2C 2 \u4E2A\u7F51\u683C\u5B50\u5143\u7D20\uFF09\u5728\u5B98\u65B9\u6837\u5F0F\u91CC\u6709\u663E\u5F0F grid-column: 2\u2014\u2014
-     \u7F51\u683C\u88AB\u538B\u7F29\u6210 [1fr, 0, 0] \u540E\u5B83\u4F1A\u843D\u5728 0px \u7684\u7B2C 2 \u8F68\uFF0C\u6574\u4E2A\u4E3B\u754C\u9762\u88AB\u6324\u51FA
-     \u89C6\u53E3\uFF08\u53EA\u5269\u80CC\u666F\u56FE\uFF09\u3002\u5FC5\u987B\u663E\u5F0F\u628A\u5B83\u62C9\u56DE\u7B2C 1 \u8F68\uFF08issue #5\uFF09\u3002
-     \u7B2C 3 \u5217\uFF08details\uFF09\u4FDD\u6301 0 \u8F68\u5373\u53EF\uFF0C\u65E0\u9700\u5904\u7406\u3002 */
-  [data-mobile-nav="frame"] > :nth-child(2) {
-    grid-column: 1 !important;
-    grid-row: 1 !important;
-    min-width: 0 !important;
-  }
-
   /* The sidebar column (first grid child) becomes a left drawer. The drawer
      hugs the sidebar content exactly (the wide sidebar carries an inline
      width, ~280px): a fixed 92vw box would leave a white strip where the
@@ -458,20 +942,15 @@ var MOBILE_CSS = `
      the viewport. A mere -100% leaves a sliver on screen; -105% (as used
      before) left 14px of the drawer plus a long 32px-blur shadow gradient
      visible along the left edge of the main UI. No box-shadow at all: the
-     dimmed backdrop already separates drawer from content.
-     Z-index note: the backdrop renders inside the shell's overlay layer
-     ([data-shell-overlay]), which forms its own stacking context. Third-party
-     plugins can force that layer up with !important (dsh-update-checker sets
-     it to 500), and when the layer outranks the drawer, the backdrop paints
-     ABOVE the drawer and swallows every tap \u2014 the drawer opens but no row
-     can be pressed (every tap just closes it). The drawer must therefore
-     outrank any such raise: 600 clears the known 500 while staying under the
-     fixed-position banners/toasts (z 9999) that float at the viewport level. */
+     dimmed backdrop already separates drawer from content. */
   [data-mobile-nav="frame"] > :first-child {
     position: absolute !important;
     inset: 0 auto 0 0 !important;
-    width: max-content !important;
-    max-width: 92vw !important;
+    width: max-content;
+    max-width: 92vw;
+    /* dsh-pocket \u79FB\u690D\u4E0A\u6E38 PR#42\uFF08dsh-pocket issue #42\uFF09\uFF1A\u7B2C\u4E09\u65B9\u63D2\u4EF6\uFF08\u5982
+       dsh-update-checker\uFF09\u7528 !important \u628A shell overlay \u62AC\u5230 z500\uFF0Cdrawer 40
+       \u4F1A\u88AB\u76D6\u4F4F\u70B9\u4E0D\u5230\u4F1A\u8BDD\u3002\u63D0\u5230 600 \u2014\u2014 \u9AD8\u4E8E 500\u3001\u4F4E\u4E8E\u89C6\u53E3\u7EA7\u6A2A\u5E45/toast 9999\u3002 */
     z-index: 600 !important;
     transform: translateX(-110%);
     transition: transform .28s var(--ds-ease-in-out, ease-in-out);
@@ -522,29 +1001,29 @@ var MOBILE_CSS = `
      column is then exactly centered in every browser. */
   [data-phase] [class$="_scrollBody"] {
     scrollbar-gutter: auto !important;
-    scrollbar-width: none !important;
+    scrollbar-width: none;
   }
   [data-phase] [class$="_scrollBody"]::-webkit-scrollbar {
     display: none !important;
-    width: 0 !important;
-    height: 0 !important;
+    width: 0;
+    height: 0;
   }
   /* Message action rows (copy / run-time badges) can overflow the right
      edge on narrow screens \u2014 keep them inside the message width. */
   [data-phase] [class$="_actions"] {
-    overflow: hidden !important;
+    overflow: hidden;
   }
   [data-phase] [class$="_actions"] [class$="_timeEnd"] {
-    flex: 0 1 auto !important;
-    min-width: 0 !important;
-    overflow: hidden !important;
-    text-overflow: ellipsis !important;
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap !important;
   }
 
   [data-phase] [class$="_scroll"]:has(p) {
-    padding-left: 20px !important;
-    padding-right: 20px !important;
+    padding-left: 20px;
+    padding-right: 20px;
     font-size: 15px !important;
   }
   /* The official markdown styles set an explicit 16px on paragraphs and
@@ -557,69 +1036,349 @@ var MOBILE_CSS = `
     font-size: 15px !important;
   }
 
+  /* Markdown tables: the official table uses width:max-content, so on a phone
+     it hugs the content and leaves dead space beside/inside the table. Force
+     the table to fill the message column and let the table wrapper handle
+     overflow if a cell is genuinely too wide. */
+  [data-phase] table {
+    width: 100%;
+    max-width: 100%;
+  }
+  [data-phase] th,
+  [data-phase] td {
+    max-width: none;
+    min-width: 0;
+  }
+
+  /* User bubbles: the official stack is capped at min(525px, 82%), which on a
+     phone leaves a large blank strip on the left and pushes the bubble high.
+     On mobile let the user message fill the same full width as assistant
+     messages (the bubble background then spans the whole message column). */
+  [data-phase] [class$="_userStack"],
+  [data-phase] [class$="_userStack"] [class$="_bubble"] {
+    box-sizing: border-box;
+    width: fit-content;
+    max-width: 100%;
+  }
+
   /* --- Composer bottom row on mobile ---
-     The official row gives the model pill (trailing) flex:0 0 auto, which
-     squeezes the agent-permission pill (modes) down to 15px: the pill's
-     chevron then overflows on top of the model name. Let the permission
-     pill keep its natural width and let the model pill shrink instead.
-     Anchored by the composer card (:has(textarea)): row = last child,
-     tools = first child, permission pill = its 2nd child, model pill =
-     row's last child. */
-  [data-phase] [class*="_card"]:has(textarea) > :last-child {
-    gap: 8px !important;
+     The official row contains two lanes: tools (plus + permission/mode
+     controls) and trailing (model + context + send). The previous rules made
+     the modes lane flex:none, so its full intrinsic width collided with the
+     model selector on narrow phones. Keep fixed hit targets fixed, but let
+     text-bearing controls shrink and ellipsize before they paint over the
+     trailing lane. */
+  [data-phase] [class*="_card"]:has(textarea) [class$="_row"]:has([class$="_trailing"]) {
+    box-sizing: border-box;
+    container-type: inline-size;
+    container-name: dsh-mobile-composer;
+    flex-wrap: nowrap;
+    gap: 6px;
+    padding-left: 6px;
+    padding-right: 6px;
+    /* The dropdown menu is absolutely positioned inside this row; any
+       overflow: hidden here would clip it. Inner lanes keep their own
+       overflow clipping, so the row itself can stay visible. */
+    overflow: visible;
   }
-  [data-phase] [class*="_card"]:has(textarea) > :last-child > :first-child {
-    gap: 8px !important;
+  [data-phase] [class*="_card"]:has(textarea) [class$="_row"]:has([class$="_trailing"]) > :first-child {
+    flex: 0 1 auto;
+    min-width: 0;
+    gap: 6px;
+    /* The permission dropdown (Menu, side: top) pops upward from inside the
+       tools lane; overflow hidden here would crop it, same as the row. Text
+       ellipsis is handled by the trigger label itself. */
+    overflow: visible;
   }
-  [data-phase] [class*="_card"]:has(textarea) > :last-child > :first-child > :nth-child(2) {
-    flex: 0 0 auto !important;
+  [data-phase] [class*="_card"]:has(textarea) [class$="_row"]:has([class$="_trailing"]) > [class$="_trailing"] {
+    flex: 1 1 auto;
+    min-width: 0;
+    gap: 6px;
+    /* Must not clip the model dropdown; the model trigger clips its own label. */
+    overflow: visible;
   }
-  [data-phase] [class*="_card"]:has(textarea) > :last-child > :last-child {
-    flex: 1 1 auto !important;
-    min-width: 0 !important;
+  /* PermissionSelect / plan controls share the tools lane. Let the
+     permission label use the remaining tools width, while the lower-priority
+     plan slot keeps an icon-sized target instead of stealing model width. */
+  [data-phase] [class*="_card"]:has(textarea) [class$="_row"]:has([class$="_trailing"]) > :first-child > :nth-child(2) {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: none;
+    gap: 4px;
+    /* The permission Menu list (side: top) pops upward out of this lane;
+       overflow hidden crops it. The trigger label clips its own text. */
+    overflow: visible;
+  }
+  [data-phase] [class*="_card"]:has(textarea) [class$="_row"]:has([class$="_trailing"]) > :first-child > :nth-child(2) > [class$="_trigger"] {
+    flex: 1 1 auto;
+    min-width: 28px;
+    max-width: 100%;
+    display: flex !important;
+    overflow: hidden;
+  }
+  [data-phase] [class*="_card"]:has(textarea) [class$="_row"]:has([class$="_trailing"]) > :first-child > :nth-child(2) > [class$="_trigger"] > [class$="_triggerLabel"] {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap !important;
+  }
+  /* Slot wrappers such as the live plan chip are not trigger elements. Do
+     not force them into an icon-sized box: their child button would overflow
+     that wrapper and paint over PermissionSelect. Keep the wrapper intrinsic;
+     the model lane below is the one that sacrifices width. */
+  [data-phase] [class*="_card"]:has(textarea) [class$="_row"]:has([class$="_trailing"]) > :first-child > :nth-child(2) > :not([class$="_trigger"]) {
+    flex: 0 1 auto;
+    min-width: 34px;
+    max-width: max-content;
+    overflow: visible;
+  }
+  [data-phase] [class*="_card"]:has(textarea) [class$="_row"]:has([class$="_trailing"]) > :first-child > :nth-child(2) > [class$="_wrap"] > [class$="_chip"] {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap !important;
+  }
+  @container dsh-mobile-composer (max-width: 359px) {
+    [data-phase] [class*="_card"]:has(textarea) [class$="_row"]:has([class$="_trailing"]) > :first-child > :nth-child(2) > [class$="_trigger"] > [class$="_triggerLabel"] {
+      display: none !important;
+    }
+  }
+  /* Model selector: flexible and shrinkable, but never clipped.
+     The root must be overflow:visible so the dropdown menu can render.
+     The trigger itself clips the label text. */
+  [data-phase] [class*="_card"]:has(textarea) [class$="_root"]:has(> [class$="_trigger"][aria-haspopup="menu"]) {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: visible;
+  }
+  @container dsh-mobile-composer (max-width: 359px) {
+    [data-phase] [class*="_card"]:has(textarea) [class$="_root"]:has(> [class$="_trigger"][aria-haspopup="menu"]) {
+      flex-basis: auto;
+    }
+  }
+  [data-phase] [class*="_card"]:has(textarea) [class$="_root"]:has(> [class$="_trigger"][aria-haspopup="menu"]) > [class$="_trigger"] {
+    display: flex !important;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+  }
+  [data-phase] [class*="_card"]:has(textarea) [class$="_root"]:has(> [class$="_trigger"][aria-haspopup="menu"]) > [class$="_trigger"] > [class$="_triggerLabel"] {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap !important;
+  }
+  [data-phase] [class*="_card"]:has(textarea) [class$="_root"]:has(> [class$="_trigger"]):not(:has(> [class$="_trigger"][aria-haspopup="menu"])) {
+    flex: 0 0 auto;
+  }
+
+  /* Model switcher menu: center the dropdown on the now-shrinkable trigger,
+     but never let it exceed the viewport on narrow phones. */
+  [data-phase] [class*="_card"]:has(textarea) [class$="_root"]:has(> [class$="_trigger"]) > [class$="_menu"] {
+    left: 50% !important;
+    right: auto !important;
+    transform: translateX(-50%) !important;
+    max-width: min(320px, calc(100vw - 16px));
+    box-sizing: border-box;
+  }
+
+  /* --- Fix composer row overflow at narrow widths (320px-360px) ---
+     Force every direct child of the tools and trailing lanes to shrink,
+     so they can fit within the available space without causing horizontal
+     overflow. */
+  [data-phase] [class*="_card"]:has(textarea) [class$="_row"]:has([class$="_trailing"]) > :first-child > * {
+    flex-shrink: 1;
+    min-width: 0;
+  }
+  [data-phase] [class*="_card"]:has(textarea) [class$="_row"]:has([class$="_trailing"]) > [class$="_trailing"] > * {
+    flex-shrink: 1;
+    min-width: 0;
   }
 
   /* --- Session header on mobile ---
-     Layout goal: [toggle] [session title] [mode badge] in a row, with the
-     Session log capsule removed from the header (relocated to the drawer
-     footer). Stable structural hooks only:
-       [data-phase] header                     the session header element
-       header > :first-child                   titleRow (titleCluster + utilities)
-       header > :first-child > :last-child     headerUtilities (Session log seat) */
-  [data-phase] header {
-    padding-right: 12px !important;
+     Keep the host-owned metadata in one responsive row. The conversation
+     title and running/subagent status keep their lanes; the mode text is the
+     first to ellipsize when space runs out, while Files keeps its hit area. */
+  [data-mobile-nav="frame"] [data-phase] header {
+    padding-left: 16px;
+    padding-right: 8px;
   }
-  /* Give the title row a lane clear of the absolutely-placed toggle, then
-     balance the header: with header padding-right 12px, a 20px left
-     padding puts the title's geometric center exactly on the viewport
-     center (measured 195/195 at 390px). */
-  [data-phase] header > :first-child {
-    padding-left: 20px !important;
+  [data-mobile-nav="frame"] [data-phase] header > :first-child {
+    display: flex !important;
+    align-items: center;
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    gap: 2px;
+    padding-left: 20px;
   }
-  /* The directory toggle sits at the far left of the header (the header
-     is position:relative; the data-slot wrappers are display:contents). */
+  [data-mobile-nav="frame"] [data-phase] header > :first-child > :first-child {
+    display: flex !important;
+    align-items: center;
+    flex: 1 1 auto;
+    min-width: 0;
+    gap: 2px;
+  }
+  /* The directory toggle stays at the far left of the header. */
   [data-mobile-nav="toggle"] {
     position: absolute !important;
     left: 8px !important;
     top: 12px !important;
     z-index: 2 !important;
   }
-  /* The Files action sits at the FAR RIGHT of the header so it reads as a
-     distinct control from the directory toggle on the left (which opens
-     the history sidebar). */
+  /* Files remains in flow and is ordered as the rightmost plugin action. */
   [data-mobile-nav="files"] {
-    position: absolute !important;
+    position: static !important;
     left: auto !important;
-    right: 8px !important;
-    top: 12px !important;
-    z-index: 2 !important;
+    right: auto !important;
+    top: auto !important;
+    z-index: auto !important;
+  }
+  [data-mobile-nav="frame"] [data-phase] header [class$="_headerActions"] {
+    display: flex !important;
+    align-items: center;
+    box-sizing: border-box;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: calc(100% - 32px);
+    margin-left: auto;
+    justify-content: flex-end;
+    gap: 2px;
+  }
+  /* The title takes the remaining width and never paints outside it; the
+     metadata lane's mode text is what shrinks first. */
+  [data-mobile-nav="frame"] [data-phase] header [class$="_crumbs"] {
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap !important;
+  }
+  /* Mode label: preserve its icon and scale with the viewport \u2014 it yields
+     space to the title and subagent status first, but can use more width on
+     wider screens up to 220px before ellipsizing. */
+  [data-mobile-nav="frame"] [data-phase] header [class$="_label"]:has(> svg) {
+    order: 1;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: min(22vw, 220px);
+    display: block;
+    position: relative;
+    box-sizing: border-box;
+    padding-left: 18px;
+    padding-right: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap !important;
+  }
+  [data-mobile-nav="frame"] [data-phase] header [class$="_label"]:has(> svg) > svg {
+    position: absolute !important;
+    left: 0 !important;
+    top: 50% !important;
+    transform: translateY(-50%) !important;
+  }
+  /* Running/subagent controls keep their full status text and hit area; they
+     do not give up width to the mode label. NOTE: the real subagent lineage
+     root has class="ZKlsPq_root " \u2014 a TRAILING SPACE from the plugin's
+     template-literal className \u2014 so [class$="_root"] never matches it. Use
+     [class*="_root"] and exclude the switcher root ([class*="_switcherRoot"])
+     so only the count/job roots get pinned (the switcher must stay shrinkable
+     so its own title can ellipsize). */
+  [data-mobile-nav="frame"] [data-phase] header [class*="_root"]:not([class*="_switcherRoot"]):has(> button[class$="_trigger"]) {
+    order: 2;
+    flex: 0 0 auto;
+    min-width: max-content;
+    max-width: max-content;
+    white-space: nowrap !important;
+    position: static;
+  }
+  [data-mobile-nav="frame"] [data-phase] header [class*="_root"]:not([class*="_switcherRoot"]):has(> button[class$="_trigger"]) > button,
+  [data-mobile-nav="frame"] [data-phase] header [class*="_root"]:not([class*="_switcherRoot"]):has(> button[class$="_trigger"]) > button * {
+    white-space: nowrap !important;
+  }
+  /* The lineage count's leading "/" (ZKlsPq_separator \u2014 official desktop
+     chrome rendered only for a root session inside the crumbs) looks like a
+     stray extra breadcrumb level on small screens; hide it. The crumbSep "/"
+     between ancestry segments (subagent sessions) is a real separator and
+     stays. */
+  [data-mobile-nav="frame"] [data-phase] header [class$="_crumbs"] [class$="_separator"] {
+    display: none !important;
+  }
+  [data-mobile-nav="frame"] [data-phase] header [data-mobile-nav="files"] {
+    order: 3;
+    flex: 0 0 28px;
+    width: 28px;
   }
   /* Session log download: gone from the header row on mobile (the utilities
      seat holds only the session-log-export capsule). */
-  [data-phase] header > :first-child > :last-child {
+  [data-mobile-nav="frame"] [data-phase] header > :first-child > :last-child {
     display: none !important;
   }
+  /* Header crowding on narrow phones.
+     A background-job trigger in the header actions, or the subagent lineage
+     count ("N \u4E2A\u5B50\u4EE3\u7406") living inside the crumbs nav, consumes the width the
+     mode label would otherwise use. This squeezes the crumbs nav so hard that
+     the subagent count is clipped by the nav's overflow:hidden \u2014 the text
+     looks overwritten and the trigger's right edge stops being reliably
+     tappable. Mode text is the lowest-priority item, so it is compressed
+     first. The lineage root (dsh-client-ui-subagent) sits in the crumbs for
+     BOTH running and idle descendants, so we key the guards on that root
+     rather than the transient running-state dot \u2014 otherwise the count gets
+     clipped again the moment agents go idle. Match roots with
+     [class*="_root"] (the real class carries a trailing space; [class$="_root"]
+     matches nothing). */
+  @media (max-width: 440px) {
+    [data-mobile-nav="frame"] [data-phase] header [class$="_crumbs"] {
+      padding-right: 8px;
+    }
+    [data-mobile-nav="frame"] [data-phase] header [class$="_headerActions"]:has([class*="_root"]) [class$="_label"]:has(> svg),
+    [data-mobile-nav="frame"] [data-phase] header:has([class$="_crumbs"] [class*="_root"]) [class$="_label"]:has(> svg) {
+      max-width: 18px;
+      min-width: 18px;
+      padding-left: 18px;
+      padding-right: 0 !important;
+    }
+  }
+  /* When the subagent lineage (any state) AND a background job are present
+     together, even the mode icon is not enough room by itself. Keep the full
+     subagent count (the reported-overwritten text) by compacting the job
+     trigger to its dot/chevron, and keep mode icon-only so the crumbs nav can
+     also hold a small right-hand gap \u2014 the subagent text should never sit
+     flush against the mode component. */
+  @media (max-width: 559px) {
+    [data-mobile-nav="frame"] [data-phase] header [class$="_crumbs"] {
+      padding-right: 8px;
+    }
+    [data-mobile-nav="frame"] [data-phase] header:has([class$="_crumbs"] [class*="_root"]) [class$="_headerActions"] [class*="_root"]:not([class*="_switcherRoot"]):has(> button[class$="_trigger"]) [class$="_count"] {
+      display: none !important;
+    }
+    [data-mobile-nav="frame"] [data-phase] header:has([class$="_crumbs"] [class*="_root"]):has([class$="_headerActions"] [class*="_root"]) [class$="_label"]:has(> svg) {
+      max-width: 18px;
+      min-width: 18px;
+      padding-left: 18px;
+      padding-right: 0 !important;
+    }
+  }
+  @media (max-width: 359px) {
+    [data-mobile-nav="frame"] [data-phase] header:has([class$="_crumbs"] [class*="_root"]):has([class$="_headerActions"] [class*="_root"]) [class$="_label"]:has(> svg) {
+      display: none !important;
+    }
+  }
 
+  /* --- Header popovers on mobile (dsh-client-ui-jobs / dsh-client-ui-subagent) --- */
+  /* The official entries sit in the session header actions. Their popovers
+     are anchored to the trigger's left edge, so clamp them to the viewport. */
+  [data-mobile-nav="frame"] [data-phase] header [class$="_menu"] {
+    left: 8px !important;
+    right: auto !important;
+    width: min(336px, calc(100vw - 16px));
+    max-width: none;
+    max-height: min(420px, calc(100dvh - 120px));
+  }
   /* --- Settings dialog on mobile ---
      Desktop: 800px two-column flex (188px nav + content). Mobile: a
      near-full-width sheet \u2014 nav tabs wrap into rows on top, option rows
@@ -630,8 +1389,19 @@ var MOBILE_CSS = `
      list holds <button> tabs, so the transient export dialog (the same
      primitives Modal, header(title+close)+description+body) keeps its
      official centered card layout. Requires :has() support
-     (Chromium 105+, 2022). */
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])) {
+     (Chromium 105+, 2022).
+
+     The directory picker (dsh-client-ui-directory-picker-browse) must be
+     excluded too: its footer bar holds <button> children AND its breadcrumb
+     trail (role="navigation") \u2014 which the role gate relies on to exclude
+     it \u2014 is REPLACED by the path input in edit mode (pencil button), so
+     without the ZuhsRW exclusion clicking the pencil would suddenly match
+     this sheet rule: the dialog jumps to the top of the screen, the header
+     (with the path input) is hidden by the > :first-child > :first-child
+     display:none rule below, and the user can no longer type a path
+     (issue #12, 2026-08-16). The picker family keeps the official layout
+     on mobile in every mode. */
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) {
     position: absolute !important;
     left: 8px !important;
     /* Fixed top (no translateY): a transform on the panel combined with the
@@ -639,76 +1409,88 @@ var MOBILE_CSS = `
        coordinate frame, dragging the whole sidebar content off-screen. The
        safe-area inset keeps the sheet below the status bar / notch. */
     top: calc(env(safe-area-inset-top, 0px) + 12px) !important;
-    width: calc(100vw - 16px) !important;
-    max-width: calc(100vw - 16px) !important;
+    width: calc(100vw - 16px);
+    max-width: calc(100vw - 16px);
     /* Height follows the content (no dead space under a short page); it
        caps at 100dvh-24 (less the safe-area top) and the options area
        scrolls only then. */
-    height: auto !important;
-    max-height: min(800px, calc(100vh - 24px - env(safe-area-inset-top, 0px))) !important;
-    max-height: min(800px, calc(100dvh - 24px - env(safe-area-inset-top, 0px))) !important;
+    height: auto;
+    max-height: min(800px, calc(100vh - 24px - env(safe-area-inset-top, 0px)));
+    max-height: min(800px, calc(100dvh - 24px - env(safe-area-inset-top, 0px)));
     flex-direction: column !important;
     border-radius: 14px !important;
     animation: dsh-mobile-nav-sheet-in .22s var(--ds-ease-out, ease-in-out);
   }
   /* The settings sheet's dimmed mask fades in with the panel (the mask is
      the first child of the overlay that directly contains the sheet). */
-  :has(> [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"]))) > :first-child {
+  :has(> [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"]))) > :first-child {
     animation: dsh-mobile-nav-fade .18s var(--ds-ease-out, ease-in-out);
   }
   @media (prefers-reduced-motion: reduce) {
-    [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])),
-    :has(> [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"]))) > :first-child {
+    [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])),
+    :has(> [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"]))) > :first-child {
       animation: none !important;
     }
   }
   /* The export dialog (not the settings sheet) must never overflow the
      viewport: the official centered card can be wider than 390px. */
   [aria-modal="true"]:not(:has(> :first-child > :last-child > button)) {
-    max-width: calc(100vw - 32px) !important;
+    max-width: calc(100vw - 32px);
   }
   /* Nav bar: hide the "Settings" caption (redundant on a full-width sheet)
      and wrap the tab list so every tab is visible \u2014 a horizontal scroll cut
      the last tab ("Plugins") off with no affordance to scroll. */
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])) > :first-child {
-    width: 100% !important;
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :first-child {
+    width: 100%;
     flex-direction: row !important;
-    align-items: center !important;
-    gap: 6px !important;
-    padding: 10px 12px 8px !important;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 12px 8px;
   }
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])) > :first-child > :first-child {
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :first-child > :first-child {
     display: none !important;
   }
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])) > :first-child > :last-child {
+  /* The tab list scrolls in the space left by the toolbar: the toolbar
+     (config file + close) is reparented INTO this nav row by a client
+     reconciler task (settings-toolbar-reparent), so the tab list must be
+     anchored by its class, NOT by :last-child (the reparented toolbar
+     becomes the nav's new last child). */
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :first-child [class$="_navList"] {
+    flex: 1 1 auto;
+    min-width: 0;
     flex-direction: row !important;
-    flex-wrap: wrap !important;
-    width: 100% !important;
-    gap: 6px !important;
-    overflow: visible !important;
+    flex-wrap: wrap;
+    gap: 6px;
+    overflow: visible;
   }
-  /* Content toolbar (Open configuration file + close): spread to the edges
-     instead of clustering right with a dead zone on the left. The toolbar
-     children carry official auto-margins that would defeat space-between,
-     so neutralize them. The close button gets a round tappable base so it
-     reads as its own control, not part of the outline button. */
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])) > :last-child > :first-child {
-    justify-content: space-between !important;
-    align-items: center !important;
-    padding: 0 12px !important;
-    min-height: 40px !important;
+  /* Content toolbar (Open configuration file + close): grouped flush to
+     the right edge, and reparented INTO the nav row on mobile so it shares
+     one line with the tabs (user feedback 2026-08-16 \u2014 the toolbar's own
+     row left a full-width dead gap under the tabs). Anchored by class: the
+     header leaves the content subtree, so :first-child/:last-child anchors
+     would now hit the options area. Children carry official auto-margins
+     that would defeat flex-end, so neutralize them. The close button gets
+     a round tappable base so it reads as its own control, not part of the
+     outline button. */
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) [class$="_header"] {
+    flex: 0 0 auto;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 8px;
+    padding: 0 0 0 4px;
+    min-height: 40px;
   }
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])) > :last-child > :first-child > * {
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) [class$="_header"] > * {
     margin-left: 0 !important;
     margin-right: 0 !important;
   }
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])) > :last-child > :first-child > :last-child {
-    width: 32px !important;
-    height: 32px !important;
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) [class$="_header"] > :last-child {
+    width: 32px;
+    height: 32px;
     border-radius: 50% !important;
     display: inline-flex !important;
-    align-items: center !important;
-    justify-content: center !important;
+    align-items: center;
+    justify-content: center;
     background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, .06)) !important;
   }
   /* Appearance mode cards: the official cube row renders three tall
@@ -716,27 +1498,31 @@ var MOBILE_CSS = `
      compact horizontal trio (icon + label inline, equal widths).
      Relies on the official cube-row class name of this version. */
   [aria-modal="true"] [class$="_cubeRow"] {
-    gap: 6px !important;
+    gap: 6px;
   }
   [aria-modal="true"] [class$="_cubeRow"] > * {
-    flex: 1 1 0 !important;
+    flex: 1 1 0;
     flex-direction: row !important;
-    align-items: center !important;
-    justify-content: center !important;
-    gap: 6px !important;
-    padding: 10px 8px !important;
-    min-height: 0 !important;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 10px 8px;
+    min-height: 0;
   }
   /* Content: the options scroll area gets bottom breathing room so the last
      row never sits flush against the sheet's rounded corner. */
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])) > :last-child {
-    flex: 1 1 auto !important;
-    min-height: 0 !important;
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :last-child {
+    flex: 1 1 auto;
+    min-height: 0;
   }
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])) > :last-child > :last-child {
-    padding: 0 12px 24px !important;
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :last-child > :last-child {
+    padding: 0 12px 24px;
   }
+}
+`;
 
+// client/mobile/styles/compat.css.ts
+var COMPAT_CSS = `@media (max-width: 1023px) {
   /* ---------- dsh-web-ui family compatibility ----------
      The linxin666 plugin suite extends the shell frame directly:
        - aionui-panel appends two trailing grid columns (explorer / preview)
@@ -807,6 +1593,19 @@ var MOBILE_CSS = `
     box-shadow: 0 -4px 28px rgba(0, 0, 0, .18) !important;
     z-index: 56 !important;
     animation: dsh-mobile-nav-sheet-up .24s var(--ds-ease-out, ease-in-out) !important;
+    /* Fullscreen toggle (issue #8): animate the geometry change instead of
+       snapping. visibility is deliberately not listed, so opening/closing
+       the sheet stays instant; the open/close keyframes own transform. */
+    transition:
+      left .24s var(--ds-ease-out, ease-in-out),
+      right .24s var(--ds-ease-out, ease-in-out),
+      top .24s var(--ds-ease-out, ease-in-out),
+      bottom .24s var(--ds-ease-out, ease-in-out),
+      width .24s var(--ds-ease-out, ease-in-out),
+      height .24s var(--ds-ease-out, ease-in-out),
+      border-radius .24s var(--ds-ease-out, ease-in-out),
+      box-shadow .24s var(--ds-ease-out, ease-in-out),
+      padding-top .24s var(--ds-ease-out, ease-in-out) !important;
   }
   /* User-opened preview sheet (frame marker, set on file-row tap). */
   [data-mobile-nav="frame"][data-aionui-preview-open] [data-aionui-preview-col] {
@@ -816,17 +1615,123 @@ var MOBILE_CSS = `
   [data-mobile-nav="frame"][data-aionui-explorer-open] [data-aionui-explorer-col] {
     visibility: visible !important;
   }
+  /* While the preview sheet is up, the explorer sheet yields (two stacked
+     bottom sheets would read as one broken overlay). Closing the preview
+     via its collapse chevron / tab close clears the marker, and the
+     explorer sheet returns. Same specificity as the explorer-open rule, so
+     this must stay AFTER it. */
+  [data-mobile-nav="frame"][data-aionui-preview-open] [data-aionui-explorer-col] {
+    visibility: hidden !important;
+  }
   /* The open drawer must never sit under a sheet: while the frame is in the
      narrow-expanded state both sheets yield (later in the file than the
-     open marker rule, so it wins at equal specificity). */
+     open marker rule, so it wins at equal specificity). The fullscreen
+     toggle has its own drawer-open rule at the end of its section. */
   [data-mobile-nav="frame"]:not([data-sidebar-collapsed]) [data-aionui-explorer-col],
   [data-mobile-nav="frame"]:not([data-sidebar-collapsed]) [data-aionui-preview-col] {
     visibility: hidden !important;
+    display: none !important;
   }
   /* The suite's own expand button reads the store state we bypass on
      mobile \u2014 hide it; the header Files action is the opener. */
   .aionui-floating-expand {
     display: none !important;
+  }
+
+  /* Preview sheet fullscreen toggle (issue #8): a fixed button parked in the
+     sheet's titlebar row, just left of the suite's collapse chevron (24px at
+     right:8px of the sheet, and the sheet spans 8px..(100vw-8px)). The top
+     calc mirrors the sheet geometry above (bottom 40px + min(50dvh, 420px));
+     when the frame carries "data-mobile-preview-full" the sheet goes
+     fullscreen and the button moves to the viewport corner. */
+  [data-mobile-nav="preview-full-toggle"] {
+    position: absolute !important;
+    right: 36px !important;
+    top: 8px !important;
+    z-index: 57 !important;
+    display: none !important;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--aion-text-secondary, var(--dsw-alias-label-secondary, inherit));
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    /* Native look: same size/radius/hover language as the suite's tab-bar
+       icon buttons (the 20px panelCollapse next to it). The button lives
+       INSIDE the preview column, so it rides the sheet's own open
+       animation and geometry transition \u2014 no curve matching needed. */
+    transition: background-color .15s, top .24s var(--ds-ease-out, ease-in-out);
+  }
+  [data-mobile-nav="preview-full-toggle"]:hover {
+    background: var(--aion-bg-3, rgba(0, 0, 0, .22));
+  }
+  [data-mobile-nav="preview-full-toggle"]:active {
+    background: var(--aion-bg-active, rgba(0, 0, 0, .28));
+  }
+  [data-mobile-nav="preview-full-toggle"]:focus-visible {
+    outline: 2px solid var(--dsw-alias-state-business-primary, #4f6ef7);
+    outline-offset: 2px;
+  }
+  [data-mobile-nav="preview-full-toggle"] svg {
+    width: 14px;
+    height: 14px;
+  }
+  /* Keep the last tab (and the "+" URL-tab trigger) from sliding under the
+     fullscreen toggle: reserve the right end of the preview tab row. */
+  [data-aionui-preview-col] [class$="_tabScroll"] {
+    padding-right: 34px !important;
+  }
+  /* Visible only while the preview sheet is open. Visibility itself is
+     inherited from the column, so the sheet's own hide rules (collapse,
+     drawer open) cover the button too. */
+  [data-mobile-nav="frame"][data-aionui-preview-open] [data-aionui-preview-col] [data-mobile-nav="preview-full-toggle"] {
+    display: inline-flex !important;
+  }
+  /* Icon swap on the frame fullscreen marker. */
+  [data-mobile-nav="preview-full-toggle"] .dsh-mobile-nav-full-out {
+    display: none !important;
+  }
+  [data-mobile-nav="frame"][data-mobile-preview-full] [data-aionui-preview-col] [data-mobile-nav="preview-full-toggle"] .dsh-mobile-nav-full-in {
+    display: none !important;
+  }
+  [data-mobile-nav="frame"][data-mobile-preview-full] [data-aionui-preview-col] [data-mobile-nav="preview-full-toggle"] .dsh-mobile-nav-full-out {
+    display: inline !important;
+  }
+  /* Fullscreen preview: the sheet fills the whole viewport (notch included);
+     the safe-area padding drops the titlebar row below the status bar, and
+     the toggle follows the titlebar into the top corner. */
+  [data-mobile-nav="frame"][data-aionui-preview-open][data-mobile-preview-full] [data-aionui-preview-col] {
+    inset: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    top: 0 !important;
+    bottom: 0 !important;
+    width: 100% !important;
+    height: 100dvh !important;
+    max-height: none !important;
+    box-sizing: border-box !important;
+    padding-top: env(safe-area-inset-top, 0px) !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    z-index: 57 !important;
+    animation: none !important;
+  }
+  /* Fullscreen: the column fills the viewport, so the button follows the
+     titlebar row down below the notch. */
+  [data-mobile-nav="frame"][data-mobile-preview-full] [data-aionui-preview-col] [data-mobile-nav="preview-full-toggle"] {
+    top: calc(env(safe-area-inset-top, 0px) + 8px) !important;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    [data-aionui-preview-col],
+    [data-mobile-nav="preview-full-toggle"] {
+      transition: none !important;
+      animation: none !important;
+    }
   }
 
   /* dsh-web-ui sidebar entries (task board / ssh) sit flush against each
@@ -896,25 +1801,61 @@ var MOBILE_CSS = `
      The official dialog is a desktop two-column form; on a phone the
      label/control split leaves a huge dead gap and long descriptions wrap
      into tall stacks. Stack each row (text above, control full-width) and
-     compact the nav tabs into an even wrap. */
+     keep the nav tabs on ONE horizontally scrolling row. */
 
-  /* Nav tabs: a stable 3-per-row grid (two clean rows instead of a ragged
-     wrap) with tighter cells. */
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])) > :first-child > :last-child {
-    display: grid !important;
-    grid-template-columns: repeat(3, 1fr) !important;
+  /* Nav tabs: single scrolling row instead of the 3-per-row grid \u2014 seven
+     categories wrap into three rows on a phone (~130px of sheet height);
+     one row with a thin scrollbar keeps every tab reachable and returns
+     that space to the options area (user feedback 2026-08-16). An earlier
+     one-row attempt had no scroll affordance and silently cut the last
+     tab off; the thin scrollbar IS the affordance. Scoped to the frame
+     marker: the desktop dialog keeps its official vertical nav column. */
+  [data-mobile-nav="frame"] [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :first-child [class$="_navList"] {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
     gap: 6px !important;
+    width: 100% !important;
+    scrollbar-width: thin !important;
+    -webkit-overflow-scrolling: touch !important;
   }
-  [aria-modal="true"] [class$="_navCell"] {
+  /* Hairline scrollbar for the tab row: the default WebKit scrollbar reads
+     fat on a phone; 2px keeps the scroll affordance without the bulk. */
+  [data-mobile-nav="frame"] [aria-modal="true"] [class$="_navList"]::-webkit-scrollbar {
+    height: 2px !important;
+  }
+  [data-mobile-nav="frame"] [aria-modal="true"] [class$="_navList"]::-webkit-scrollbar-thumb {
+    background: var(--dsw-alias-border-l2, rgba(0, 0, 0, .22)) !important;
+    border-radius: 1px !important;
+  }
+  [data-mobile-nav="frame"] [aria-modal="true"] [class$="_navList"]::-webkit-scrollbar-track {
+    background: transparent !important;
+  }
+  [data-mobile-nav="frame"] [aria-modal="true"] [class$="_navCell"] {
+    flex: 0 0 auto !important;
+    white-space: nowrap !important;
     padding: 6px 8px !important;
     gap: 6px !important;
     font-size: 13px !important;
     justify-content: flex-start !important;
   }
-  [aria-modal="true"] [class$="_navCell"] svg {
+  [data-mobile-nav="frame"] [aria-modal="true"] [class$="_navCell"] svg {
     width: 14px !important;
     height: 14px !important;
     flex: none !important;
+  }
+  /* Content toolbar: the "Open configuration file" button is hidden on
+     mobile \u2014 it is rarely needed on a phone and steals ~180px from the
+     tab row's scroll area (user feedback 2026-08-16). Only the close \u2715
+     stays, flush right in the nav row. Desktop untouched (frame scoped). */
+  [data-mobile-nav="frame"] [aria-modal="true"] [class$="_header"] [class$="_actions"] {
+    display: none !important;
+  }
+  [data-mobile-nav="frame"] [aria-modal="true"] [class$="_header"] [class$="_actions"] [class$="_action"] {
+    font-size: 13px !important;
+    padding: 6px 12px !important;
+    min-height: 0 !important;
   }
   /* Setting rows: text on top, control below at full width. */
   [aria-modal="true"] [class$="_section"] [class$="_row"] {
@@ -953,11 +1894,11 @@ var MOBILE_CSS = `
     height: 32px !important;
     font-size: 13px !important;
   }
-  [data-aionui-explorer-col] [class$="_treeRow"] {
+  [data-aionui-explorer-col] [class*="_treeRow"] {
     height: 30px !important;
     font-size: 13px !important;
   }
-  [data-aionui-explorer-col] [class$="_treeRow"] svg {
+  [data-aionui-explorer-col] [class*="_treeRow"] svg {
     width: 14px !important;
     height: 14px !important;
   }
@@ -1063,6 +2004,237 @@ var MOBILE_CSS = `
     white-space: nowrap !important;
   }
 
+  /* ---------- dsh-genui panel dock ----------
+     The genui panel docks above the composer (conversation.input.dock,
+     id genui-panel). On a phone its business-blue outline, generous chrome
+     and single-line ellipsis read as an unfinished artifact: long titles
+     truncate mid-word ("\u2026default b\xB7\xB7\xB7") with the chevron glued to the
+     ellipsis, and the pill crowds the composer. Mobile treatment: neutral
+     card border matching the composer, tighter chrome so the full title
+     fits, chevron with breathing room. Scoped to the mobile frame marker \u2014
+     desktop keeps genui's own styling untouched. */
+
+  [data-mobile-nav="frame"] [data-genui-panel] {
+    margin: 6px 12px 4px !important;
+    border-color: var(--dsw-alias-border-l1, rgba(0, 0, 0, .12)) !important;
+    border-radius: 12px !important;
+  }
+  [data-mobile-nav="frame"] [data-genui-panel] [class*="_panelToggle"] {
+    padding: 7px 12px !important;
+    gap: 8px !important;
+  }
+  [data-mobile-nav="frame"] [data-genui-panel] [class*="_panelBadge"] {
+    padding: 0 7px !important;
+    border-radius: 5px !important;
+    font-size: 10.5px !important;
+    line-height: 1.7 !important;
+  }
+  [data-mobile-nav="frame"] [data-genui-panel] [class*="_panelTitle"] {
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+    font-size: 12.5px !important;
+    line-height: 1.45 !important;
+  }
+  [data-mobile-nav="frame"] [data-genui-panel] [class*="_panelChevron"] {
+    flex: none !important;
+    margin-left: 0 !important;
+    padding-left: 4px !important;
+  }
+
+  /* ---------- git-graph branch chip: inside the composer card ----------
+     The branch chip (conversation.input.dock) floats between the dock rows
+     and the input card; on a phone it reads as a stray capsule crowding the
+     composer. A client reconciler task (git-chip-reparent) reparents the
+     chip INTO the composer card; these rules pin it to the card's top-left
+     and give the card a dedicated chip row. The card is position: relative
+     by the official stylesheet, so the absolute anchor resolves against it.
+     The plugin's own sheet sets all four offsets on the anchor, so
+     right/bottom must be neutralized too. Scope is the frame marker + the
+     anchor attribute (NOT the dock slot \u2014 the reparenting moves the chip
+     out of the dock's subtree). Desktop untouched: the frame marker only
+     exists below 1024px, and the effect restores the chip to the dock when
+     the viewport widens. Chip row geometry (2026-08-16, user feedback):
+     48px padding left a 16px dead gap between the chip and the input line
+     and made the composer read too tall; the row is now 40px = chip (24px)
+     at top 12px + ~4px to the textarea \u2014 the chip sits slightly lower and
+     the gap is compressed without touching the official height budget
+     further. */
+
+  [data-mobile-nav="frame"] [data-gitgraph-chip-anchor] {
+    position: absolute !important;
+    top: 12px !important;
+    left: 12px !important;
+    right: auto !important;
+    bottom: auto !important;
+    z-index: 1 !important;
+  }
+  [data-mobile-nav="frame"] [class$="_card"]:has([data-gitgraph-chip-anchor]) {
+    padding-top: 40px !important;
+  }
+
+  /* ---------- dsh-meme \u8868\u60C5\u9009\u62E9\u5361\u7247\uFF1A\u53F3\u7F18\u5B89\u5168\u8DDD\u79BB ----------
+     The meme picker (conversation.input.overlay, id meme-picker) is
+     absolutely positioned left:0 inside the composer's overlay anchor with
+     width:min(360px,90vw). That 90vw resolves against the VIEWPORT, not the
+     anchor, and with the picker's own padding+border the border-box
+     (377px on a 390px phone) exceeds the 356px anchor \u2014 the card's right
+     edge then runs past the anchor and off the right screen edge, while the
+     left edge keeps the anchor's 17px safe inset. Stretch the card to the
+     anchor on both sides (left/right 0, width auto, border-box) so the
+     right gap mirrors the left; cap at the card's original border-box size
+     (360px content + 24px padding + 2px border) so tablets keep the
+     intended card width instead of stretching. Desktop is untouched: the
+     frame marker only exists below 1024px. */
+  [data-mobile-nav="frame"] .meme-picker {
+    left: 0 !important;
+    right: 0 !important;
+    width: auto !important;
+    box-sizing: border-box !important;
+    max-width: 386px !important;
+  }
+
+  /* dsh-meme \u7F51\u683C\u7F29\u7565\u56FE\uFF1A\u81EA\u9002\u5E94\u94FA\u6EE1\u5361\u7247,\u4FDD\u7559 8px \u95F4\u9699\u3002
+     dsh-meme \u7684 .mp-grid \u662F flex-wrap + \u56FA\u5B9A 76px \u7684 .mp-cell(\u884C\u5185 style \u518D\u538B\u5230 74px):
+     3 \u5217(390px \u624B\u673A)\u65F6\u6BCF\u884C\u53F3\u4FA7\u5269 ~78px \u7A7A\u767D,\u5361\u7247\u6CA1\u6709\u94FA\u6EE1\u3002\u6362\u6210\u54CD\u5E94\u5F0F grid:
+     repeat(auto-fill, minmax(64px,1fr)) \u8BA9\u5217\u6570\u968F\u53EF\u7528\u5BBD\u5EA6\u4F38\u7F29\u3001\u5361\u7247 width:100% +
+     aspect-ratio:1 \u968F\u8F68\u9053\u81EA\u9002\u5E94(\u65B9\u5F62,cover \u88C1\u5207\u4E0D\u53D8),gap \u4ECD\u662F dsh-meme \u7684 8px\u3002
+     \u884C\u5185 width/height \u7528 !important \u8986\u76D6;\u624B\u673A\u7AEF\u7EA6 4 \u5217\u3001\u5E73\u677F\u7AEF\u7EA6 5 \u5217,\u5747\u6EE1\u5BBD\u3002 */
+  [data-mobile-nav="frame"] .meme-picker .mp-grid {
+    display: grid !important;
+    grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)) !important;
+    scrollbar-width: thin !important;
+    scrollbar-color: var(--dsw-alias-label-tertiary, rgba(0, 0, 0, .3)) transparent !important;
+  }
+  [data-mobile-nav="frame"] .meme-picker .mp-cell {
+    width: 100% !important;
+    height: auto !important;
+    aspect-ratio: 1 !important;
+  }
+  /* dsh-meme \u7F51\u683C\u53F3\u4FA7\u6EDA\u52A8\u6761\uFF1A\u9ED8\u8BA4 WebKit \u6EDA\u52A8\u6761\u5728\u624B\u673A\u4E0A\u770B\u592A\u7C97,\u538B\u6210 4px
+     \u7EC6\u6761\u2014\u2014\u4FDD\u7559\u6EDA\u52A8\u6307\u793A\u53C8\u4E0D\u5360\u6A2A\u5411\u7A7A\u95F4,thumb \u5706\u89D2\u6D45\u8272\u3001\u8F68\u9053\u900F\u660E\u3002 */
+  [data-mobile-nav="frame"] .meme-picker .mp-grid::-webkit-scrollbar {
+    width: 4px !important;
+  }
+  [data-mobile-nav="frame"] .meme-picker .mp-grid::-webkit-scrollbar-thumb {
+    background: var(--dsw-alias-label-tertiary, rgba(0, 0, 0, .3)) !important;
+    border-radius: 999px !important;
+  }
+  [data-mobile-nav="frame"] .meme-picker .mp-grid::-webkit-scrollbar-track {
+    background: transparent !important;
+  }
+
+  /* ---------- agent preset \u6A21\u5F0F\u9009\u62E9\u83DC\u5355\uFF1A\u624B\u673A\u7AEF\u7D27\u51D1\u5E95\u90E8\u5F39\u5C42 ----------
+     The official agent-preset menu (role=menu, portal mounted on body) uses
+     position:fixed + max-height:820px + bottom:12px, so on a phone it
+     stretches from the trigger down to 12px above the screen bottom \u2014
+     effectively filling the screen. Turn it into a polished bottom sheet:
+     cap the height, center it horizontally (the official max-width 360px
+     left-anchors at left:12px, leaving 12/18px asymmetric gaps), add a
+     drag-handle affordance, breathing room, and softer top radius; the
+     inner viewport keeps scrolling. Scoped to the agent-preset item class
+     (cubgiG_*) so other role=menu dropdowns (model/access mode) are
+     untouched. Desktop \u22651024px is outside the media query, so it keeps the
+     official large dropdown. */
+  /* agent-preset \u83DC\u5355\u4F9D\u8D56 @deepseek-ai/dsh-client-ui-agent-preset \u7684 CSS Module \u54C8\u5E0C (cubgiG_*)\uFF0C\u5347\u7EA7\u8BE5\u5305\u65F6\u9700\u9A8C\u8BC1\u6B64\u9009\u62E9\u5668\u662F\u5426\u4ECD\u6709\u6548 */
+  [role="menu"]:has([class*="cubgiG_item"]) {
+    top: auto !important;
+    left: 50% !important;
+    right: auto !important;
+    bottom: 12px !important;
+    transform: translateX(-50%) !important;
+    width: min(100% - 24px, 360px) !important;
+    max-width: 360px !important;
+    max-height: min(55dvh, 440px) !important;
+    padding: 30px 6px 10px !important;
+    border-radius: 16px !important;
+  }
+  [role="menu"]:has([class*="cubgiG_item"])::before {
+    content: '';
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 36px;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--dsw-alias-border-l2, rgba(0, 0, 0, .22)) !important;
+    pointer-events: none;
+  }
+  /* \u83DC\u5355\u5185\u90E8\u6EDA\u52A8\u6761\uFF1A\u9ED8\u8BA4 WebKit \u6EDA\u52A8\u6761\u5728\u7AD6\u5C4F\u592A\u7C97,\u4F1A\u5360 ~15px \u5BBD\u5EA6\u628A\u6587\u5B57\u63CF\u8FF0
+     \u6324\u7A84,\u5BFC\u81F4\u63CF\u8FF0\u6362\u884C/\u622A\u65AD\u4E0D\u81EA\u7136\u3002\u538B\u6210 4px \u7EC6\u6761(\u4E0E\u8868\u60C5\u7F51\u683C\u4E00\u81F4),\u6587\u5B57\u533A\u57DF
+     \u6062\u590D\u81EA\u9002\u5E94\u5BBD\u5EA6\u3002 */
+  [role="menu"]:has([class*="cubgiG_item"]) [class*="_viewport_"] {
+    scrollbar-width: thin !important;
+    scrollbar-color: var(--dsw-alias-label-tertiary, rgba(0, 0, 0, .3)) transparent !important;
+  }
+  [role="menu"]:has([class*="cubgiG_item"]) [class*="_viewport_"]::-webkit-scrollbar {
+    width: 4px !important;
+  }
+  [role="menu"]:has([class*="cubgiG_item"]) [class*="_viewport_"]::-webkit-scrollbar-thumb {
+    background: var(--dsw-alias-label-tertiary, rgba(0, 0, 0, .3)) !important;
+    border-radius: 999px !important;
+  }
+  [role="menu"]:has([class*="cubgiG_item"]) [class*="_viewport_"]::-webkit-scrollbar-track {
+    background: transparent !important;
+  }
+
+/* \u641C\u7D22\u6846\u5E95\u90E8\u95F4\u8DDD\u4FEE\u590D */
+[aria-modal="true"] [class*="tabSearchRow"] {
+  padding: 2px 4px 16px !important;
+}
+
+
+/* ===== \u5DF2\u5B89\u88C5\u5217\u8868\uFF1A\u8DEF\u5F84\u5355\u884C\u622A\u65AD ===== */
+[class*="irow"] > div > [class*="spec"] {
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  max-width: 100% !important;
+  font-size: 12px !important;
+}
+[class*="irow"] > div > [class*="nm"] {
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  max-width: 100% !important;
+}
+/* ===== \u5DF2\u5B89\u88C5\u5217\u8868\uFF1A\u624B\u673A\u7AEF\u7EB5\u5411\u91CD\u6392 ===== */
+@media (max-width: 1023px) {
+  [class*="irow"] {
+    flex-wrap: wrap !important;
+    align-items: center !important;
+    gap: 4px 10px !important;
+  }
+  [class*="irow"] > div:first-child {
+    flex: 1 1 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+  }
+  [class*="irow"] > [class*="grow"] {
+    flex: 1 1 auto !important;
+  }
+  [class*="irow"] > button {
+    flex: 0 0 auto !important;
+  }
+  [class*="irow"] > button[class*="switch"] {
+    order: 3 !important;
+  }
+  [class*="irow"] > button:not([class*="switch"]) {
+    order: 2 !important;
+  }
+  [class*="irow"] > [class*="owner"] {
+    order: 1 !important;
+  }
+  [class*="irow"] > [class*="grow"] {
+    order: 0 !important;
+  }
+}
+}
+
+`;
+
+// client/mobile/styles/misc.css.ts
+var MISC_CSS = `@media (max-width: 1023px) {
   /* ---------- hero composer on mobile ----------
      The official hero card carries a 2-line textarea plus a tall tool row,
      which reads oversized on a phone. Tighten the empty-state rhythm: keep
@@ -1096,6 +2268,103 @@ var MOBILE_CSS = `
   [data-phase="hero"] [class$="_stack"] {
     gap: 0 !important;
   }
+
+  /* ---------- composer dock: swap git branch chip with the todo card ----------
+     The git-graph branch chip (conversation.input.dock, order 100) floats
+     alone at the bottom-left above the input card, with a dead zone to its
+     right; the full-width todo card (order 0) sits above it. Swap them so
+     the chip reads as the stack's top row and the todo card fills the row
+     above the composer. The dock container itself is display:contents
+     (inline style) \u2014 its children are direct flex items of the composer
+     stack, so order on the children is what reorders them. Only the chip
+     needs an order change: -1 puts it before the todo card (order 0) and
+     before the input card (order 0, later in DOM). The todo card must KEEP
+     its order 0 \u2014 raising it past the input card's order 0 would drop it
+     below the composer entirely (2026-08-16 regression, fixed). The queue
+     strip (order 20) keeps hugging the input card. Desktop untouched (this
+     block lives inside the max-width: 1023px media query). */
+  [data-slot="conversation.input.dock"] [data-gitgraph-chip-anchor] {
+    order: -1 !important;
+  }
+  /* Mobile tap target + feedback for the branch chip (git-graph, 24px
+     desktop spec). Two real-world problems: \u2460 the chip is tiny and sits
+     right above the expandable todo card \u2014 mis-taps land on the todo card;
+     \u2461 opening the popover waits for the host's /git/branches round-trip
+     (~700ms on device) with zero feedback, so users tap again and toggle
+     the popover closed. Enlarge the target, kill double-tap zoom delay,
+     and give an instant pressed state so a tap reads as registered. */
+  [data-slot="conversation.input.dock"] [data-gitgraph-chip-anchor] [data-gitgraph-chip] {
+    touch-action: manipulation !important;
+    min-height: 34px !important;
+    padding: 0 12px !important;
+    font-size: 13px !important;
+  }
+  [data-slot="conversation.input.dock"] [data-gitgraph-chip-anchor] [data-gitgraph-chip]:active {
+    transform: scale(.96) !important;
+    transition: transform .12s !important;
+  }
+
+  /* ---------- ask question composer (ask_user_question): kill iOS Safari
+      input-focus auto-zoom ----------
+      Safari on iPhone enlarges the whole viewport when a focused <input> /
+      <textarea> computes font-size < 16px, and only reverts on blur. The ask
+      dialog is a modal composer takeover, so taps outside never blur the
+      field and the magnification persists until the field loses focus
+      (e.g. the dialog is dismissed). The ask
+      composer's custom-answer <input> (.customInput) and optionless free-form
+      <textarea> (.customTextarea) both ship at 14px (ui-user-questions
+      QuestionComposer.module.css). Raise them to 16px on mobile so Safari
+      sees a >=16px field and skips the zoom entirely. Scoped to the ask
+      composer's stable [data-question-key] root (AGENTS.md: scope hashed-class
+      selectors to the owning region, prefer stable data-* markers); the
+      class-name suffix match follows the plugin's established harness
+      CSS-module convention (verified against the live app: generated names
+      end with the original local name, e.g. uV2eYG_input / qDHVXG_searchInput). */
+  [data-question-key] [class$="_customInput"],
+  [data-question-key] [class$="_customTextarea"] {
+    font-size: 16px !important;
+  }
+}
+
+/* ---------- tablet / wide mobile: keep sheets from becoming full-width ----------
+   Below 768px the near-full-width sheets are the right call for a phone.
+   On wider but still sub-desktop viewports (foldables, tablet portrait,
+   desktop-mode tall windows) the same full-bleed sheet leaves content
+   clustered at the left edge with a large dead zone on the right. Cap and
+   center the modal sheets and the aionui bottom sheets instead. */
+@media (min-width: 768px) and (max-width: 1023px) {
+  /* All modal dialogs: centered, never edge-to-edge. The settings sheet has
+     a higher-specificity full-width rule above, so repeat its selector here
+     to win; the generic export/other-modal rule is covered by the second
+     selector. */
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])),
+  [aria-modal="true"]:not(:has(> :first-child > :last-child > button)) {
+    left: 0 !important;
+    right: 0 !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+    width: min(calc(100vw - 32px), 720px) !important;
+    max-width: min(calc(100vw - 32px), 720px) !important;
+  }
+
+  /* The dsh-web-ui explorer / preview bottom sheets: same treatment \u2014 keep
+     the mobile bottom-sheet behavior, but stop them spanning the full width. */
+  [data-aionui-explorer-col],
+  [data-aionui-preview-col] {
+    left: 0 !important;
+    right: 0 !important;
+    width: min(calc(100vw - 32px), 720px) !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+  }
+
+  /* Settings sections (e.g. Agent presets) often carry a desktop max-width
+     (720px) that leaves a dead strip on the right once the sheet is capped to
+     the same width; let them fill the sheet body instead. */
+  [aria-modal="true"] [class$="_section"] {
+    width: 100% !important;
+    max-width: none !important;
+  }
 }
 
 /* ---------- desktop: the mobile controls must never appear ---------- */
@@ -1113,194 +2382,140 @@ var MOBILE_CSS = `
 }
 `;
 
-// client/mobile/locales.ts
-var NS = "mobileNav";
+// client/mobile/styles/index.ts
+var MOBILE_CSS = [BASE_CSS, LAYOUT_CSS, COMPAT_CSS, MISC_CSS].join("\n");
+
+// client/mobile/i18n/locales.ts
+var NS2 = "mobileNav";
 var zh = {
   "open": "\u6253\u5F00\u76EE\u5F55",
   "close": "\u6536\u8D77\u76EE\u5F55",
   "backdrop": "\u70B9\u51FB\u5173\u95ED\u76EE\u5F55",
   "sessionLog": "\u5BFC\u51FA\u4F1A\u8BDD\u65E5\u5FD7",
-  "files": "\u6587\u4EF6\u6D4F\u89C8"
+  "files": "\u6587\u4EF6\u6D4F\u89C8",
+  "previewFullscreen": "\u5168\u5C4F\u9884\u89C8",
+  "previewExitFullscreen": "\u9000\u51FA\u5168\u5C4F"
 };
 var en = {
   "open": "Open directory",
   "close": "Close directory",
   "backdrop": "Click to close directory",
   "sessionLog": "Session log",
-  "files": "Files"
+  "files": "Files",
+  "previewFullscreen": "Fullscreen preview",
+  "previewExitFullscreen": "Exit fullscreen"
 };
 
-// client/mobile/mobile-apply.tsx
-function mobileApply(ctx) {
-  ctx.effect(() => ctx.locale.register(NS, { zh, en }), "dsh-mobile-nav: dictionaries");
+// client/mobile/index.tsx
+function apply(ctx) {
+  ctx.effect(() => ctx.locale.register(NS2, { zh, en }), "dsh-mobile-nav: dictionaries");
   ctx.effect(() => {
     const tag = document.createElement("style");
     tag.dataset.plugin = "@dsh-external/dsh-mobile-nav";
     tag.dataset.pluginCss = "@dsh-external/dsh-mobile-nav/mobile.css";
     tag.textContent = MOBILE_CSS;
     document.head.appendChild(tag);
+    setTimeout(() => {
+      if (tag.isConnected) document.head.appendChild(tag);
+    }, 0);
     return () => {
       tag.remove();
     };
   }, "dsh-mobile-nav: styles");
   ctx.effect(() => {
-    const narrow = window.matchMedia("(max-width: 1023px)");
-    const viewport = document.querySelector('meta[name="viewport"]');
-    const originalViewport = viewport?.content ?? "";
-    const themeMeta = document.createElement("meta");
-    themeMeta.name = "theme-color";
-    const bodyBg = () => getComputedStyle(document.body).backgroundColor;
-    const sync = () => {
-      if (viewport !== null) viewport.content = "width=device-width, initial-scale=1, viewport-fit=cover";
-      themeMeta.content = bodyBg();
-      if (themeMeta.parentElement === null) document.head.appendChild(themeMeta);
-    };
-    const restore = () => {
-      if (viewport !== null) viewport.content = originalViewport;
-      themeMeta.remove();
-    };
-    const onGestureStart = (event) => event.preventDefault();
-    if (narrow.matches) sync();
-    const onChange = (event) => event.matches ? sync() : restore();
-    narrow.addEventListener("change", onChange);
-    const observer = new MutationObserver(() => {
-      if (narrow.matches) themeMeta.content = bodyBg();
-    });
-    observer.observe(document.body, { attributes: true, attributeFilter: ["data-ds-dark-theme"] });
-    document.addEventListener("gesturestart", onGestureStart);
-    return () => {
-      narrow.removeEventListener("change", onChange);
-      observer.disconnect();
-      document.removeEventListener("gesturestart", onGestureStart);
-      restore();
-    };
-  }, "dsh-mobile-nav: status bar theme + viewport + zoom guard");
-  ctx.effect(() => {
-    const narrow = window.matchMedia("(max-width: 1023px)");
-    if (!narrow.matches) return () => {
-    };
-    const onChevronClick = (event) => {
-      const target = event.target;
-      if (target === null || !target.closest(".aionui-collapse-chevron")) return;
-      document.querySelector('[data-mobile-nav="frame"]')?.removeAttribute("data-aionui-explorer-open");
-    };
-    document.addEventListener("click", onChevronClick, true);
-    return () => document.removeEventListener("click", onChevronClick, true);
-  }, "dsh-mobile-nav: aionui explorer close marker");
-  ctx.effect(() => {
-    const narrow = window.matchMedia("(max-width: 1023px)");
-    if (!narrow.matches) return () => {
-    };
-    const frame = () => document.querySelector('[data-mobile-nav="frame"]');
-    const onTap = (event) => {
-      const target = event.target;
-      if (target === null) return;
-      if (target.closest('[data-aionui-explorer-col] [class$="_treeRow"]') === null) return;
-      frame()?.setAttribute("data-aionui-preview-open", "");
-    };
-    const sync = () => {
-      const pv = document.querySelector("[data-aionui-preview-col]");
-      if (pv === null) return;
-      if (getComputedStyle(pv).visibility === "hidden") frame()?.removeAttribute("data-aionui-preview-open");
-    };
-    document.addEventListener("click", onTap, true);
-    const observer = new MutationObserver(sync);
-    observer.observe(document.body, { attributes: true, subtree: true, attributeFilter: ["style"] });
-    sync();
-    return () => {
-      document.removeEventListener("click", onTap, true);
-      observer.disconnect();
-    };
-  }, "dsh-mobile-nav: preview sheet open marker");
-  ctx.effect(() => {
-    const narrow = window.matchMedia("(max-width: 1023px)");
-    if (!narrow.matches) return () => {
-    };
-    const moveTps = (stats) => {
-      if ([...stats.children].some((c) => /^TPS\s+\d/.test((c.textContent ?? "").trim()))) return;
-      const stack = stats.closest('[class$="_composerStack"]');
-      if (stack === null) return;
-      for (const el of stack.querySelectorAll("div")) {
-        const text = (el.textContent ?? "").trim();
-        if (!/^TPS\s+\d/.test(text)) continue;
-        if (el.children.length > 0) continue;
-        stats.appendChild(el);
-        return;
+    const mq = window.matchMedia("(max-width: 1023px)");
+    const set = (el, props) => {
+      for (const [key, value] of Object.entries(props)) {
+        el.style.setProperty(key, value, "important");
       }
     };
-    const mark = () => {
-      for (const root of document.querySelectorAll('[data-phase] [class$="_root"]')) {
-        if (root.closest('[class$="_composerStack"]') === null) continue;
-        const text = root.textContent ?? "";
-        if (!/(turns|steps|\bLLM\b|轮|步)/.test(text)) continue;
-        if (root.querySelector("textarea") !== null) continue;
-        root.setAttribute("data-mobile-nav", "stats");
-        moveTps(root);
-        return;
-      }
+    const apply3 = () => {
+      if (!mq.matches) return;
+      document.querySelectorAll('[class*="irow"]').forEach((row) => {
+        set(row, {
+          "flex-wrap": "wrap",
+          "align-items": "center",
+          "gap": "4px 10px"
+        });
+        const first = row.children[0];
+        if (first) {
+          set(first, {
+            "flex": "1 1 100%",
+            "max-width": "100%",
+            "min-width": "0"
+          });
+        }
+        row.querySelectorAll(':scope > button[class*="switch"]').forEach((el) => {
+          set(el, { "order": "3" });
+        });
+        row.querySelectorAll(':scope > button:not([class*="switch"])').forEach((el) => {
+          set(el, { "order": "2" });
+        });
+        row.querySelectorAll(':scope > [class*="owner"]').forEach((el) => {
+          set(el, { "order": "1" });
+        });
+        row.querySelectorAll(':scope > [class*="grow"]').forEach((el) => {
+          set(el, { "order": "0" });
+        });
+        const spec = row.querySelector('[class*="spec"]');
+        const nm = row.querySelector('[class*="nm"]');
+        if (spec) {
+          set(spec, {
+            "white-space": "nowrap",
+            "overflow": "hidden",
+            "text-overflow": "ellipsis",
+            "max-width": "100%"
+          });
+        }
+        if (nm) {
+          set(nm, {
+            "white-space": "nowrap",
+            "overflow": "hidden",
+            "text-overflow": "ellipsis",
+            "max-width": "100%"
+          });
+        }
+      });
     };
-    const observer = new MutationObserver(mark);
-    observer.observe(document.body, { childList: true, subtree: true });
-    mark();
+    apply3();
+    const mo = new MutationObserver(apply3);
+    mo.observe(document.documentElement, { childList: true, subtree: true });
+    const onMq = () => {
+      if (mq.matches) apply3();
+    };
+    mq.addEventListener("change", onMq);
     return () => {
-      observer.disconnect();
+      mo.disconnect();
+      mq.removeEventListener("change", onMq);
     };
-  }, "dsh-mobile-nav: stats line marker");
+  }, "dsh-mobile-nav: installed-list-inline-styles");
   ctx.effect(() => {
-    const narrow = window.matchMedia("(max-width: 1023px)");
-    if (!narrow.matches) return () => {
-    };
-    const cols = ["[data-aionui-explorer-col]", "[data-aionui-preview-col]"];
-    const seen = /* @__PURE__ */ new Map();
-    const play = (el) => {
-      el.animate(
-        [
-          { opacity: 0, transform: "translateY(28px)" },
-          { opacity: 1, transform: "none" }
-        ],
-        { duration: 280, easing: "cubic-bezier(.16, 1, .3, 1)", fill: "backwards" }
-      );
-    };
-    const check = () => {
-      for (const sel of cols) {
-        const el = document.querySelector(sel);
-        if (el === null) continue;
-        const visible = getComputedStyle(el).visibility === "visible";
-        const prev = seen.get(sel) ?? false;
-        if (visible && !prev) play(el);
-        seen.set(sel, visible);
-      }
-    };
-    const observer = new MutationObserver(check);
-    observer.observe(document.body, { attributes: true, subtree: true, attributeFilter: ["style", "class", "data-aionui-explorer-open"] });
-    check();
+    const stops = [
+      installFrameController(),
+      installReconciler(ctx),
+      registerReconcileTasks(ctx)
+    ];
     return () => {
-      observer.disconnect();
+      for (const stop of stops) stop();
     };
-  }, "dsh-mobile-nav: sheet rise animation replay");
+  }, "dsh-mobile-nav: reconciler infrastructure");
+  installOverlayInteractions(ctx);
+  installPhoneChrome(ctx);
+  installAionuiCompat(ctx);
   ctx.slots.inject("conversation.session.header.actions", () => ctx.slots.register({
     name: "conversation.session.header.actions",
     id: "mobile-nav-toggle",
     order: 10,
-    locale: NS,
+    locale: NS2,
     inject: () => ({
       toggleSidebar: () => ctx.layout.toggleSidebar()
     })
   }, MobileNavToggle));
-  ctx.slots.inject("shell.overlay", () => ctx.slots.register({
-    name: "shell.overlay",
-    id: "mobile-nav-overlay",
-    order: 10,
-    locale: NS,
-    inject: () => ({
-      toggleSidebar: () => ctx.layout.toggleSidebar()
-    })
-  }, MobileNavOverlay));
   ctx.slots.inject("sidebar.footer.action", () => ctx.slots.register({
     name: "sidebar.footer.action",
     id: "mobile-nav-session-log",
-    order: 10,
-    locale: NS,
+    order: 5,
+    locale: NS2,
     inject: () => ({
       downloadSessionLog: (sessionId) => ctx.sessionLogDownload.download(sessionId),
       toggleSidebar: () => ctx.layout.toggleSidebar()
@@ -1309,7 +2524,7 @@ function mobileApply(ctx) {
 }
 
 // client/pocket-locales.js
-var NS2 = "pocket";
+var NS3 = "pocket";
 var zh2 = {
   "section": "\u624B\u673A\u8BBF\u95EE",
   "title": "\u{1F4F1} \u624B\u673A\u8BBF\u95EE",
@@ -1454,15 +2669,15 @@ var styles = {
   warn: { color: "var(--dsw-alias-state-warn-primary,#b45309)", fontSize: 12, lineHeight: 1.5 }
 };
 function PocketSettingsTab({ rpcCall, t }) {
-  const [status, setStatus] = (0, import_react2.useState)(null);
-  const [busy, setBusy] = (0, import_react2.useState)(false);
-  const [error, setError] = (0, import_react2.useState)(null);
-  const [tunnelState, setTunnelState] = (0, import_react2.useState)(null);
-  const [restartNotice, setRestartNotice] = (0, import_react2.useState)(false);
-  const [updateInfo, setUpdateInfo] = (0, import_react2.useState)(null);
-  const [isDesktop, setIsDesktop] = (0, import_react2.useState)(false);
-  const [now, setNow] = (0, import_react2.useState)(Date.now());
-  (0, import_react2.useEffect)(() => {
+  const [status, setStatus] = (0, import_react.useState)(null);
+  const [busy, setBusy] = (0, import_react.useState)(false);
+  const [error, setError] = (0, import_react.useState)(null);
+  const [tunnelState, setTunnelState] = (0, import_react.useState)(null);
+  const [restartNotice, setRestartNotice] = (0, import_react.useState)(false);
+  const [updateInfo, setUpdateInfo] = (0, import_react.useState)(null);
+  const [isDesktop, setIsDesktop] = (0, import_react.useState)(false);
+  const [now, setNow] = (0, import_react.useState)(Date.now());
+  (0, import_react.useEffect)(() => {
     const t2 = setInterval(() => setNow(Date.now()), 1e3);
     return () => clearInterval(t2);
   }, []);
@@ -1494,18 +2709,18 @@ function PocketSettingsTab({ rpcCall, t }) {
     } catch {
     }
   };
-  (0, import_react2.useEffect)(() => {
+  (0, import_react.useEffect)(() => {
     load();
     const t2 = setInterval(load, 3e3);
     return () => clearInterval(t2);
   }, []);
-  (0, import_react2.useEffect)(() => {
+  (0, import_react.useEffect)(() => {
     try {
       sessionStorage.removeItem("dshp-auto-reloaded");
     } catch {
     }
   }, []);
-  (0, import_react2.useEffect)(() => {
+  (0, import_react.useEffect)(() => {
     if (isDesktop) return;
     let alive = true;
     const check = async () => {
@@ -1561,8 +2776,8 @@ function PocketSettingsTab({ rpcCall, t }) {
       setUpdateInfo((u) => ({ ...u, updating: false, result: "fail", output: err.message }));
     }
   };
-  const [disclaimerOpen, setDisclaimerOpen] = (0, import_react2.useState)(false);
-  const [disclaimerChecked, setDisclaimerChecked] = (0, import_react2.useState)(false);
+  const [disclaimerOpen, setDisclaimerOpen] = (0, import_react.useState)(false);
+  const [disclaimerChecked, setDisclaimerChecked] = (0, import_react.useState)(false);
   const doStartTunnel = async () => {
     setBusy(true);
     setError(null);
@@ -1604,7 +2819,7 @@ function PocketSettingsTab({ rpcCall, t }) {
     } catch {
     }
   };
-  const [customPin, setCustomPin] = (0, import_react2.useState)(null);
+  const [customPin, setCustomPin] = (0, import_react.useState)(null);
   const saveCustomPin = async (which) => {
     try {
       const r = await call(POCKET_ENDPOINTS.pinSetCustom, { which, value: customPin?.value ?? "" });
@@ -1620,11 +2835,11 @@ function PocketSettingsTab({ rpcCall, t }) {
       setCustomPin((c) => ({ ...c, err: err.message }));
     }
   };
-  const customPinRow = (which) => (0, import_react2.createElement)(
+  const customPinRow = (which) => (0, import_react.createElement)(
     "div",
     { style: { marginTop: 6, fontSize: 12, color: "var(--dsw-alias-label-secondary,#6b7280)", lineHeight: 1.5 } },
     t("customizing"),
-    (0, import_react2.createElement)("input", {
+    (0, import_react.createElement)("input", {
       style: { width: 110, margin: "0 6px", padding: "4px 8px", fontSize: 14, letterSpacing: 2, textAlign: "center", border: "1px solid var(--dsw-alias-border-l2,#d1d5db)", borderRadius: 6, outline: "none" },
       type: "password",
       inputMode: "numeric",
@@ -1637,35 +2852,35 @@ function PocketSettingsTab({ rpcCall, t }) {
         if (e.key === "Escape") setCustomPin(null);
       }
     }),
-    (0, import_react2.createElement)("button", { style: { ...styles.btn, height: 26, padding: "0 10px", fontSize: 12, marginLeft: 2 }, onClick: () => saveCustomPin(which) }, t("save")),
-    (0, import_react2.createElement)("button", { style: { ...styles.btn, height: 26, padding: "0 10px", fontSize: 12 }, onClick: () => setCustomPin(null) }, t("cancel")),
-    customPin?.err ? (0, import_react2.createElement)("div", { style: { color: "var(--dsw-alias-state-error-primary,#dc2626)", marginTop: 4 } }, customPin.err) : null
+    (0, import_react.createElement)("button", { style: { ...styles.btn, height: 26, padding: "0 10px", fontSize: 12, marginLeft: 2 }, onClick: () => saveCustomPin(which) }, t("save")),
+    (0, import_react.createElement)("button", { style: { ...styles.btn, height: 26, padding: "0 10px", fontSize: 12 }, onClick: () => setCustomPin(null) }, t("cancel")),
+    customPin?.err ? (0, import_react.createElement)("div", { style: { color: "var(--dsw-alias-state-error-primary,#dc2626)", marginTop: 4 } }, customPin.err) : null
   );
-  const customBtn = (which) => (0, import_react2.createElement)("button", { style: { ...styles.btn, height: 26, padding: "0 10px", fontSize: 12, marginLeft: 8 }, onClick: () => setCustomPin({ which, value: "", err: null }) }, t("customize"));
+  const customBtn = (which) => (0, import_react.createElement)("button", { style: { ...styles.btn, height: 26, padding: "0 10px", fontSize: 12, marginLeft: 8 }, onClick: () => setCustomPin({ which, value: "", err: null }) }, t("customize"));
   const lanUrl = status?.lanUrl;
   const tunnelUrl = status?.tunnelUrl;
   const tunnelPhase = tunnelState?.phase ?? "idle";
   const tunnelStarting = ["downloading", "starting", "registering"].includes(tunnelPhase);
   const tunnelStateDetail = tunnelState?.detail ?? "";
   const tunnelStateStarted = tunnelState?.startedAt ?? null;
-  return (0, import_react2.createElement)(
+  return (0, import_react.createElement)(
     "div",
     { style: styles.card },
-    (0, import_react2.createElement)(
+    (0, import_react.createElement)(
       "div",
       { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 } },
-      (0, import_react2.createElement)(
+      (0, import_react.createElement)(
         "div",
         null,
-        (0, import_react2.createElement)("strong", null, t("title")),
-        (0, import_react2.createElement)("div", { style: styles.muted }, t("subtitle"))
+        (0, import_react.createElement)("strong", null, t("title")),
+        (0, import_react.createElement)("div", { style: styles.muted }, t("subtitle"))
       ),
-      (0, import_react2.createElement)(
+      (0, import_react.createElement)(
         "div",
         { style: { fontSize: 12, color: "var(--dsw-alias-label-tertiary,#8b93a1)", textAlign: "right" } },
-        (0, import_react2.createElement)("div", { style: { whiteSpace: "nowrap" } }, t("developer")),
-        (0, import_react2.createElement)("div", { style: { whiteSpace: "nowrap" } }, t("starAsk")),
-        (0, import_react2.createElement)(
+        (0, import_react.createElement)("div", { style: { whiteSpace: "nowrap" } }, t("developer")),
+        (0, import_react.createElement)("div", { style: { whiteSpace: "nowrap" } }, t("starAsk")),
+        (0, import_react.createElement)(
           "a",
           { href: "https://github.com/shaobeichen/dsh-pocket", target: "_blank", rel: "noreferrer", style: { color: "var(--dsw-alias-brand-primary,#4f6ef7)", fontSize: 12, lineHeight: 1.6, textDecoration: "underline" } },
           t("starCta")
@@ -1674,144 +2889,144 @@ function PocketSettingsTab({ rpcCall, t }) {
     ),
     // 桌面端不显示更新/重启横幅（更新由 DSH Desktop 管理），也不需要额外提示
     // 重启后提示（进程在后台运行，停止方法）——左侧蓝色色条（桌面端不会触发本插件的自重启）
-    !isDesktop && restartNotice ? (0, import_react2.createElement)(
+    !isDesktop && restartNotice ? (0, import_react.createElement)(
       "div",
       { style: { ...styles.block, borderLeft: "4px solid var(--dsw-alias-brand-primary,#4f6ef7)", borderRadius: 8, background: "var(--dsw-alias-bg-layer-2,#f3f4f6)", padding: "10px 12px" } },
-      (0, import_react2.createElement)(
+      (0, import_react.createElement)(
         "div",
         { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 } },
-        (0, import_react2.createElement)("div", { style: { fontWeight: 600, fontSize: 13 } }, t("restarted")),
-        (0, import_react2.createElement)("button", { style: styles.btn, onClick: () => setRestartNotice(false) }, t("ok"))
+        (0, import_react.createElement)("div", { style: { fontWeight: 600, fontSize: 13 } }, t("restarted")),
+        (0, import_react.createElement)("button", { style: styles.btn, onClick: () => setRestartNotice(false) }, t("ok"))
       ),
-      (0, import_react2.createElement)("div", { style: styles.muted, marginTop: 4, wordBreak: "break-all" }, fmt(t, "bgHint", { cmd: status?.killHint ?? `lsof -ti :${status?.dshPort ?? 3080} | xargs kill -9` }))
+      (0, import_react.createElement)("div", { style: styles.muted, marginTop: 4, wordBreak: "break-all" }, fmt(t, "bgHint", { cmd: status?.killHint ?? `lsof -ti :${status?.dshPort ?? 3080} | xargs kill -9` }))
     ) : null,
     // 更新提示——左侧黄色色条（提示有新版本）；单状态：有更新/更新中/已更新自动重启，不并存
     // 桌面端不渲染（更新由 DSH Desktop 管理）
-    !isDesktop && updateInfo ? (0, import_react2.createElement)(
+    !isDesktop && updateInfo ? (0, import_react.createElement)(
       "div",
       { style: { ...styles.block, borderLeft: "4px solid var(--dsw-alias-state-warn-primary,#b45309)", borderRadius: 8, background: "var(--dsw-alias-bg-layer-2,#f3f4f6)", padding: "10px 12px" } },
-      (0, import_react2.createElement)(
+      (0, import_react.createElement)(
         "div",
         { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 } },
-        (0, import_react2.createElement)(
+        (0, import_react.createElement)(
           "div",
           { style: { fontWeight: 600, fontSize: 13 } },
           updateInfo.updated ? fmt(t, "updatedRestart", { ver: updateInfo.current }) : updateInfo.result === "ok" ? updateInfo.autoRestart ? fmt(t, "updateAutoRestarting", { ver: updateInfo.latest }) : fmt(t, "updatedOk", { ver: updateInfo.latest }) : fmt(t, "updateAvailable", { ver: updateInfo.latest })
         ),
-        updateInfo.result !== "ok" ? (0, import_react2.createElement)("button", { style: styles.primary, onClick: runUpdate, disabled: updateInfo.updating }, updateInfo.updating ? t("updating") : fmt(t, "updateTo", { ver: updateInfo.latest })) : updateInfo.autoRestart ? (0, import_react2.createElement)("button", { style: styles.btn, disabled: true }, t("restartingNow")) : (0, import_react2.createElement)("button", { style: styles.primary, onClick: restartPocket, disabled: updateInfo.restarting }, updateInfo.restarting ? t("restarting") : t("restartNow"))
+        updateInfo.result !== "ok" ? (0, import_react.createElement)("button", { style: styles.primary, onClick: runUpdate, disabled: updateInfo.updating }, updateInfo.updating ? t("updating") : fmt(t, "updateTo", { ver: updateInfo.latest })) : updateInfo.autoRestart ? (0, import_react.createElement)("button", { style: styles.btn, disabled: true }, t("restartingNow")) : (0, import_react.createElement)("button", { style: styles.primary, onClick: restartPocket, disabled: updateInfo.restarting }, updateInfo.restarting ? t("restarting") : t("restartNow"))
       ),
-      (0, import_react2.createElement)(
+      (0, import_react.createElement)(
         "div",
         { style: styles.muted, marginTop: 4 },
         updateInfo.updating ? fmt(t, "updatingDetail", { s: elapsed(updateInfo.startedAt) }) : updateInfo.restarting ? fmt(t, "restartingDetail", { s: elapsed(updateInfo.startedAt) }) : updateInfo.result === "ok" ? updateInfo.autoRestart ? t("updatedAutoDetail") : t("updatedRestartDetail") : updateInfo.result === "fail" ? fmt(t, "updateFailed", { err: updateInfo.output || t("unknownError") }) : fmt(t, "versionRange", { cur: updateInfo.current, latest: updateInfo.latest })
       )
     ) : null,
     // 局域网
-    (0, import_react2.createElement)(
+    (0, import_react.createElement)(
       "div",
       { style: styles.block },
-      (0, import_react2.createElement)("div", { style: { fontWeight: 600, fontSize: 13 } }, t("lanTitle")),
-      lanUrl ? (0, import_react2.createElement)(
+      (0, import_react.createElement)("div", { style: { fontWeight: 600, fontSize: 13 } }, t("lanTitle")),
+      lanUrl ? (0, import_react.createElement)(
         "div",
         null,
-        (0, import_react2.createElement)("img", { src: status.lanQr, alt: "LAN QR", style: styles.qr }),
-        (0, import_react2.createElement)("div", { style: styles.code }, lanUrl),
-        (0, import_react2.createElement)("div", { style: styles.muted }, t("lanHint")),
+        (0, import_react.createElement)("img", { src: status.lanQr, alt: "LAN QR", style: styles.qr }),
+        (0, import_react.createElement)("div", { style: styles.code }, lanUrl),
+        (0, import_react.createElement)("div", { style: styles.muted }, t("lanHint")),
         // 访问密码开关（issue #24）：默认开启；关闭后扫码直连（仅同一局域网设备可访问）
-        (0, import_react2.createElement)(
+        (0, import_react.createElement)(
           "div",
           { style: { display: "flex", alignItems: "center", gap: 8, marginTop: 8 } },
-          (0, import_react2.createElement)("span", { style: { fontSize: 12, color: "var(--dsw-alias-label-secondary,#6b7280)" } }, t("lanPin")),
-          (0, import_react2.createElement)("button", {
+          (0, import_react.createElement)("span", { style: { fontSize: 12, color: "var(--dsw-alias-label-secondary,#6b7280)" } }, t("lanPin")),
+          (0, import_react.createElement)("button", {
             style: { ...styles.btn, height: 28, padding: "0 12px", fontSize: 12, fontWeight: status?.lanAuthEnabled !== false ? 600 : 400, background: status?.lanAuthEnabled !== false ? "var(--dsw-alias-button-primary-fill, var(--dsw-alias-brand-primary,#4f6ef7))" : "var(--dsw-alias-bg-layer-1,#fff)", color: status?.lanAuthEnabled !== false ? "var(--dsw-alias-label-primary-foreground, #fff)" : "var(--dsw-alias-label-primary,inherit)" },
             onClick: () => setLanAuth(true)
           }, t("on")),
-          (0, import_react2.createElement)("button", {
+          (0, import_react.createElement)("button", {
             style: { ...styles.btn, height: 28, padding: "0 12px", fontSize: 12, fontWeight: status?.lanAuthEnabled === false ? 600 : 400, background: status?.lanAuthEnabled === false ? "var(--dsw-alias-state-error-primary,#dc2626)" : "var(--dsw-alias-bg-layer-1,#fff)", color: status?.lanAuthEnabled === false ? "#fff" : "var(--dsw-alias-label-primary,inherit)" },
             onClick: () => setLanAuth(false)
           }, t("off"))
         ),
-        status?.lanAuthEnabled !== false ? customPin?.which === "lan" ? customPinRow("lan") : (0, import_react2.createElement)(
+        status?.lanAuthEnabled !== false ? customPin?.which === "lan" ? customPinRow("lan") : (0, import_react.createElement)(
           "div",
           { style: { marginTop: 6, fontSize: 12, color: "var(--dsw-alias-label-secondary,#6b7280)", lineHeight: 1.5 } },
           fmt(t, status?.lanPinCustom ? "lanPinCustomValue" : "lanPinValue", { pin: status.lanToken }),
-          (0, import_react2.createElement)("button", { style: { ...styles.btn, height: 26, padding: "0 10px", fontSize: 12, marginLeft: 8 }, onClick: refreshLanPin }, t("refresh")),
+          (0, import_react.createElement)("button", { style: { ...styles.btn, height: 26, padding: "0 10px", fontSize: 12, marginLeft: 8 }, onClick: refreshLanPin }, t("refresh")),
           customBtn("lan")
-        ) : (0, import_react2.createElement)(
+        ) : (0, import_react.createElement)(
           "div",
           { style: { marginTop: 6, fontSize: 12, color: "var(--dsw-alias-state-warn-primary,#b45309)", lineHeight: 1.5 } },
           t("lanPinOff")
         )
-      ) : (0, import_react2.createElement)("div", { style: styles.muted }, t("lanStarting"))
+      ) : (0, import_react.createElement)("div", { style: styles.muted }, t("lanStarting"))
     ),
     // 公网
-    (0, import_react2.createElement)(
+    (0, import_react.createElement)(
       "div",
       { style: styles.block },
-      (0, import_react2.createElement)("div", { style: { fontWeight: 600, fontSize: 13 } }, t("wanTitle")),
-      tunnelUrl ? (0, import_react2.createElement)(
+      (0, import_react.createElement)("div", { style: { fontWeight: 600, fontSize: 13 } }, t("wanTitle")),
+      tunnelUrl ? (0, import_react.createElement)(
         "div",
         null,
-        (0, import_react2.createElement)("img", { src: status.tunnelQr, alt: "Tunnel QR", style: styles.qr }),
-        (0, import_react2.createElement)("div", { style: styles.code }, tunnelUrl),
-        (0, import_react2.createElement)("div", { style: styles.muted }, t("wanHint")),
-        status.accessToken ? customPin?.which === "public" ? customPinRow("public") : (0, import_react2.createElement)(
+        (0, import_react.createElement)("img", { src: status.tunnelQr, alt: "Tunnel QR", style: styles.qr }),
+        (0, import_react.createElement)("div", { style: styles.code }, tunnelUrl),
+        (0, import_react.createElement)("div", { style: styles.muted }, t("wanHint")),
+        status.accessToken ? customPin?.which === "public" ? customPinRow("public") : (0, import_react.createElement)(
           "div",
           { style: { marginTop: 6, fontSize: 12, color: "var(--dsw-alias-label-secondary,#6b7280)", lineHeight: 1.5 } },
           fmt(t, status?.publicPinCustom ? "wanPinCustom" : "wanPin", { pin: status.accessToken }),
           customBtn("public"),
-          status?.publicPinCustom ? (0, import_react2.createElement)("div", { style: { marginTop: 2, fontSize: 11, color: "var(--dsw-alias-state-warn-primary,#b45309)" } }, t("pinCustomHint")) : null
+          status?.publicPinCustom ? (0, import_react.createElement)("div", { style: { marginTop: 2, fontSize: 11, color: "var(--dsw-alias-state-warn-primary,#b45309)" } }, t("pinCustomHint")) : null
         ) : null,
-        (0, import_react2.createElement)("button", { style: styles.btn, onClick: stopTunnel }, t("stopTunnel"))
-      ) : (0, import_react2.createElement)(
+        (0, import_react.createElement)("button", { style: styles.btn, onClick: stopTunnel }, t("stopTunnel"))
+      ) : (0, import_react.createElement)(
         "div",
         null,
-        (0, import_react2.createElement)("button", { style: { ...styles.primary, margin: "8px 0" }, onClick: startTunnel, disabled: busy || tunnelStarting }, busy ? t("opening") : t("enable")),
-        tunnelStarting ? (0, import_react2.createElement)(
+        (0, import_react.createElement)("button", { style: { ...styles.primary, margin: "8px 0" }, onClick: startTunnel, disabled: busy || tunnelStarting }, busy ? t("opening") : t("enable")),
+        tunnelStarting ? (0, import_react.createElement)(
           "div",
           { style: { marginTop: 4, fontSize: 12, color: "var(--dsw-alias-label-secondary,#6b7280)" } },
           tunnelPhase === "downloading" ? fmt(t, "downloading", { s: elapsed(tunnelStateStarted) }) : fmt(t, "connecting", { s: elapsed(tunnelStateStarted), suffix: elapsed(tunnelStateStarted) > 30 ? t("slowHint") : "" })
-        ) : tunnelPhase === "error" ? (0, import_react2.createElement)(
+        ) : tunnelPhase === "error" ? (0, import_react.createElement)(
           "div",
           { style: { marginTop: 4, fontSize: 12, color: "var(--dsw-alias-state-error-primary,#dc2626)" } },
           fmt(t, "error", { detail: tunnelStateDetail || t("unknownError") })
         ) : null
       )
     ),
-    error ? (0, import_react2.createElement)("div", { style: { color: "var(--dsw-alias-state-error-primary,#dc2626)", fontSize: 12, marginTop: 8 } }, `\u274C ${error}`) : null,
+    error ? (0, import_react.createElement)("div", { style: { color: "var(--dsw-alias-state-error-primary,#dc2626)", fontSize: 12, marginTop: 8 } }, `\u274C ${error}`) : null,
     // 安全免责声明弹框（issue #31）：每次开启公网访问前确认
-    disclaimerOpen ? (0, import_react2.createElement)(
+    disclaimerOpen ? (0, import_react.createElement)(
       "div",
       { style: { position: "fixed", inset: 0, zIndex: 1e4, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 } },
-      (0, import_react2.createElement)(
+      (0, import_react.createElement)(
         "div",
         { style: { background: "var(--dsw-alias-bg-layer-1,#fff)", borderRadius: 12, maxWidth: 420, width: "100%", padding: "20px 22px", boxShadow: "0 8px 32px rgba(0,0,0,.18)" } },
-        (0, import_react2.createElement)("div", { style: { fontWeight: 600, fontSize: 15, color: "var(--dsw-alias-state-warn-primary,#b45309)", marginBottom: 10 } }, t("disclaimerTitle")),
-        (0, import_react2.createElement)("div", { style: { fontSize: 13, lineHeight: 1.7, color: "var(--dsw-alias-label-primary,inherit)" } }, t("disclaimerBody")),
-        (0, import_react2.createElement)(
+        (0, import_react.createElement)("div", { style: { fontWeight: 600, fontSize: 15, color: "var(--dsw-alias-state-warn-primary,#b45309)", marginBottom: 10 } }, t("disclaimerTitle")),
+        (0, import_react.createElement)("div", { style: { fontSize: 13, lineHeight: 1.7, color: "var(--dsw-alias-label-primary,inherit)" } }, t("disclaimerBody")),
+        (0, import_react.createElement)(
           "label",
           { style: { display: "flex", alignItems: "center", gap: 8, marginTop: 14, fontSize: 13, cursor: "pointer" } },
-          (0, import_react2.createElement)("input", { type: "checkbox", checked: disclaimerChecked, onChange: (e) => setDisclaimerChecked(e.target.checked), style: { width: 16, height: 16 } }),
+          (0, import_react.createElement)("input", { type: "checkbox", checked: disclaimerChecked, onChange: (e) => setDisclaimerChecked(e.target.checked), style: { width: 16, height: 16 } }),
           t("disclaimerAgree")
         ),
-        (0, import_react2.createElement)(
+        (0, import_react.createElement)(
           "div",
           { style: { display: "flex", gap: 8, marginTop: 16 } },
-          (0, import_react2.createElement)("button", { style: { ...styles.btn, flex: 1 }, onClick: () => setDisclaimerOpen(false) }, t("cancel")),
-          (0, import_react2.createElement)("button", {
+          (0, import_react.createElement)("button", { style: { ...styles.btn, flex: 1 }, onClick: () => setDisclaimerOpen(false) }, t("cancel")),
+          (0, import_react.createElement)("button", {
             style: { ...styles.primary, flex: 1, opacity: disclaimerChecked ? 1 : 0.5 },
             disabled: !disclaimerChecked,
             onClick: confirmDisclaimer
           }, t("disclaimerAgree"))
         ),
-        !disclaimerChecked ? (0, import_react2.createElement)("div", { style: { marginTop: 8, fontSize: 12, color: "var(--dsw-alias-state-error-primary,#dc2626)" } }, t("disclaimerHint")) : null
+        !disclaimerChecked ? (0, import_react.createElement)("div", { style: { marginTop: 8, fontSize: 12, color: "var(--dsw-alias-state-error-primary,#dc2626)" } }, t("disclaimerHint")) : null
       )
     ) : null,
     // 页面最底部：反馈入口
-    (0, import_react2.createElement)(
+    (0, import_react.createElement)(
       "div",
       { style: { ...styles.block, textAlign: "center" } },
-      (0, import_react2.createElement)(
+      (0, import_react.createElement)(
         "a",
         { href: "https://github.com/shaobeichen/dsh-pocket/issues", target: "_blank", rel: "noreferrer", style: { fontSize: 12, color: "var(--dsw-alias-label-secondary,#6b7280)", textDecoration: "none" } },
         t("feedback")
@@ -1819,11 +3034,11 @@ function PocketSettingsTab({ rpcCall, t }) {
     )
   );
 }
-function apply(ctx) {
-  mobileApply(ctx);
+function apply2(ctx) {
+  apply(ctx);
   const rpcCall = (endpoint, payload, signal) => ctx.connection.rpc.call(POCKET_RPC_CHANNEL, endpoint, payload, signal);
-  const translate = ctx.locale.bind(NS2);
-  ctx.effect(() => ctx.locale.register(NS2, { zh: zh2, en: en2 }), "dsh-pocket: pocket locale dictionaries");
+  const translate = ctx.locale.bind(NS3);
+  ctx.effect(() => ctx.locale.register(NS3, { zh: zh2, en: en2 }), "dsh-pocket: pocket locale dictionaries");
   ctx.slots.inject(
     "settings.section",
     () => ctx.slots.register(

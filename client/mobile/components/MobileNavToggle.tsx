@@ -1,6 +1,7 @@
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { IconFolderOpenOutline16, IconPanelLeftOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { NS } from './locales.ts'
+import { NS } from '../i18n/locales.ts'
+import { getFrame } from '../effects/phone-chrome.ts'
 
 /** Full props for the session-header directory toggle. */
 export interface MobileNavToggleProps extends PropsRuntime<'conversation.session.header.actions'>, PropsLocale<typeof NS> {
@@ -19,11 +20,15 @@ export interface MobileNavToggleProps extends PropsRuntime<'conversation.session
  */
 export function MobileNavToggle({ toggleSidebar, t }: MobileNavToggleProps) {
   const toggleExplorer = (): void => {
-    const frame = document.querySelector('[data-mobile-nav="frame"]')
+    const frame = getFrame()
     if (frame === null) return
     if (frame.hasAttribute('data-aionui-explorer-open')) {
       frame.removeAttribute('data-aionui-explorer-open')
     } else {
+      // The preview sheet outranks the explorer in compat.css (two stacked
+      // sheets read as one broken overlay): opening the explorer must yield
+      // the preview, or the Files action appears dead while preview is up.
+      frame.removeAttribute('data-aionui-preview-open')
       frame.setAttribute('data-aionui-explorer-open', '')
     }
   }

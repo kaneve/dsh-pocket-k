@@ -1,6 +1,6 @@
 // dsh-pocket 网页客户端：
 //   1. 设置页签「手机访问」（局域网/公网二维码 + 更新/重启提示）
-//   2. 移动端适配（移植自 MIT 项目 dsh-web-mobile，见 client/mobile/LICENSE.dsh-web-mobile）
+//   2. 移动端适配（移植自本地 fork dsh-web-mobile v2.0.0，upstream mexiaosqwq/dsh-web-mobile，MIT；见 client/mobile/LICENSE.dsh-web-mobile）
 //
 // 手机扫码打开的就是电脑上的 dsh web，实时同步；窄屏自动变成抽屉布局。
 //
@@ -10,7 +10,7 @@
 import { createElement as h, useEffect, useState } from 'react';
 
 import { POCKET_RPC_CHANNEL, POCKET_ENDPOINTS, redactStatus, compareVersions } from './api.js';
-import { mobileApply } from './mobile/mobile-apply.tsx';
+import { apply as mobileApply } from './mobile';
 import { NS as POCKET_NS, zh as POCKET_ZH, en as POCKET_EN } from './pocket-locales.js';
 
 const name = 'dsh-pocket';
