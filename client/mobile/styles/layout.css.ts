@@ -167,6 +167,19 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
      model selector on narrow phones. Keep fixed hit targets fixed, but let
      text-bearing controls shrink and ellipsize before they paint over the
      trailing lane. */
+  /* :has()-free fallback (older Android WebView / iOS Safari <15.4, which
+     also lack container queries): without it the composer action row is
+     completely unstyled — model selector / context / send button lose
+     their right-aligned lane. Modern browsers match the more specific
+     :has() rules below, which override this baseline. */
+  [data-phase] [class*="_card"] [class$="_trailing"] {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    margin-left: auto;
+    min-width: 0;
+    gap: 6px;
+  }
   [data-phase] [class*="_card"]:has(textarea) [class$="_row"]:has([class$="_trailing"]) {
     box-sizing: border-box;
     container-type: inline-size;

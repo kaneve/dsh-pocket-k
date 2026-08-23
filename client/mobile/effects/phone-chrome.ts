@@ -256,7 +256,7 @@ export function installOverlayInteractions(ctx: ClientContext): void {
       if (drawer === null || !drawer.contains(target)) return
       if (target.closest('[class*="sessionRow"] button') !== null) return
       const navigates = target.closest(
-        'button[data-dsh-taskboard-entry], button[data-dsh-ssh-entry], [class*="newSession"], [class*="sessionRow"], [class*="searchResultRow"], [class*="searchResultWorkspace"]',
+        'button[data-dsh-taskboard-entry], button[data-dsh-ssh-entry], [class*="newSession"], [class*="sessionRow"], [class*="searchResultRow"], [class*="searchResultWorkspace"], [class*="usg_"]',
       )
       if (navigates !== null) toggleSidebar()
     }
