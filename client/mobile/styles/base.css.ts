@@ -98,7 +98,10 @@ export const BASE_CSS = `
 [data-mobile-nav="backdrop"] {
   position: absolute;
   inset: 0;
-  z-index: 30;
+  /* dsh-pocket 移植上游 PR#42 配套：抽屉已抬至 600（高于第三方 !important 抬升的
+     shell overlay z500），背板须同步保持在抽屉之下、抬升 overlay 之上，否则外侧
+   * 点击会被盖住的插件层截胡、压暗层也会被穿帮。590 = (500,600) 区间。 */
+  z-index: 590;
   background: rgba(0, 0, 0, .45);
   cursor: pointer;
   animation: dsh-mobile-nav-fade .2s var(--ds-ease-in-out, ease-in-out);

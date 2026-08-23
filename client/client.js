@@ -862,7 +862,10 @@ var BASE_CSS = `
 [data-mobile-nav="backdrop"] {
   position: absolute;
   inset: 0;
-  z-index: 30;
+  /* dsh-pocket \u79FB\u690D\u4E0A\u6E38 PR#42 \u914D\u5957\uFF1A\u62BD\u5C49\u5DF2\u62AC\u81F3 600\uFF08\u9AD8\u4E8E\u7B2C\u4E09\u65B9 !important \u62AC\u5347\u7684
+     shell overlay z500\uFF09\uFF0C\u80CC\u677F\u987B\u540C\u6B65\u4FDD\u6301\u5728\u62BD\u5C49\u4E4B\u4E0B\u3001\u62AC\u5347 overlay \u4E4B\u4E0A\uFF0C\u5426\u5219\u5916\u4FA7
+   * \u70B9\u51FB\u4F1A\u88AB\u76D6\u4F4F\u7684\u63D2\u4EF6\u5C42\u622A\u80E1\u3001\u538B\u6697\u5C42\u4E5F\u4F1A\u88AB\u7A7F\u5E2E\u3002590 = (500,600) \u533A\u95F4\u3002 */
+  z-index: 590;
   background: rgba(0, 0, 0, .45);
   cursor: pointer;
   animation: dsh-mobile-nav-fade .2s var(--ds-ease-in-out, ease-in-out);
@@ -945,7 +948,10 @@ var LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
     inset: 0 auto 0 0 !important;
     width: max-content;
     max-width: 92vw;
-    z-index: 40 !important;
+    /* dsh-pocket \u79FB\u690D\u4E0A\u6E38 PR#42\uFF08dsh-pocket issue #42\uFF09\uFF1A\u7B2C\u4E09\u65B9\u63D2\u4EF6\uFF08\u5982
+       dsh-update-checker\uFF09\u7528 !important \u628A shell overlay \u62AC\u5230 z500\uFF0Cdrawer 40
+       \u4F1A\u88AB\u76D6\u4F4F\u70B9\u4E0D\u5230\u4F1A\u8BDD\u3002\u63D0\u5230 600 \u2014\u2014 \u9AD8\u4E8E 500\u3001\u4F4E\u4E8E\u89C6\u53E3\u7EA7\u6A2A\u5E45/toast 9999\u3002 */
+    z-index: 600 !important;
     transform: translateX(-110%);
     transition: transform .28s var(--ds-ease-in-out, ease-in-out);
     background: var(--dsw-alias-bg-base, #ffffff);

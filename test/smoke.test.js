@@ -103,19 +103,23 @@ test('client bundle：status 访问必须可选链（回归：1.9.0 白屏——
   assert.ok(src.includes('status?.lanAuthEnabled'), 'bundle 存在可选链访问');
 });
 
-test('移动导航 backdrop（issue #38）：点击穿透不抢抽屉内点击 + 抽屉外点击关闭保留', async () => {
+test('移动导航 backdrop（issue #38 + PR#42，适配 vendored v2.0.0 架构）', async () => {
   const { readFileSync } = await import('node:fs');
   const src = readFileSync(new URL('../client/client.js', import.meta.url), 'utf8');
-  // CSS：backdrop 必须 pointer-events: none（纯压暗层，不接收点击）
-  const css = src.match(/\[data-mobile-nav="backdrop"\][^}]*}/)?.[0] ?? '';
-  assert.ok(css.includes('pointer-events: none'), 'backdrop 点击穿透');
-  // JSX：backdrop 是纯视觉 div（无 role/onClick）
-  assert.ok(src.includes('"data-mobile-nav": "backdrop"'), 'backdrop 纯视觉渲染');
-  // 关闭逻辑：抽屉内导航关闭 + 抽屉外点击关闭（两套 document capture contains 处理）
-  assert.ok((src.match(/contains\(target\)/g) || []).length >= 2, '存在抽屉内外两套点击处理');
-  // 抽屉层级（PR #42）：必须高于第三方插件对 shell overlay 层的抬升（500）
-  // 直接断言 bundle 中抽屉规则的 z-index: 600（若退回 40 则此处失败）
-  assert.ok(src.includes('z-index: 600 !important'), '抽屉 z-index 600（高于 overlay 抬升 500）');
+  // 【架构差异说明】上游 v1.x 的 backdrop 是常驻纯视觉层（pointer-events:none +
+  // document capture 关闭）；vendored v2.0.0 重构为临时元素——drawer 开启才创建、
+  // 关闭即移除（effects/overlay-backdrop-fab），点击背板即关抽屉。抢点击问题
+  // 以生命周期规避，故断言改为 v2.0.0 等价契约：
+  assert.ok(src.includes('dataset.mobileNav'), 'backdrop 经 dataset 挂载（临时元素）');
+  assert.ok(src.includes('"backdrop"'), 'backdrop 标记值存在');
+  // 关闭逻辑：drawer 内点击判定（phone-chrome）+ 背板点击关闭（backdrop click→toggle）
+  assert.ok((src.match(/contains\(target\)/g) || []).length >= 1, 'drawer 内/外点击判定在');
+  // 层级（PR#42 移植）：第三方插件以 !important 抬 shell overlay 至 z500；
+  // 抽屉 600、背板 590 —— 均高于 500，低于视口级横幅/toast 9999，保持背板<抽屉次序
+  const drawer = src.match(/\[data-mobile-nav="frame"\] > :first-child \{[^}]*}/)?.[0] ?? '';
+  assert.ok(drawer.includes('z-index: 600 !important'), '抽屉 z-index 600（高于 overlay 抬升 500）');
+  const bcss = src.match(/\[data-mobile-nav="backdrop"\] \{[^}]*}/)?.[0] ?? '';
+  assert.ok(bcss.includes('z-index: 590'), '背板 z-index 590（高于抬升 overlay、低于抽屉）');
   assert.ok(!src.includes('z-index: 40 !important'), '不再用 40（会被第三方抬升的 overlay 盖住）');
 });
 

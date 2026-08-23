@@ -47,7 +47,10 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
     inset: 0 auto 0 0 !important;
     width: max-content;
     max-width: 92vw;
-    z-index: 40 !important;
+    /* dsh-pocket 移植上游 PR#42（dsh-pocket issue #42）：第三方插件（如
+       dsh-update-checker）用 !important 把 shell overlay 抬到 z500，drawer 40
+       会被盖住点不到会话。提到 600 —— 高于 500、低于视口级横幅/toast 9999。 */
+    z-index: 600 !important;
     transform: translateX(-110%);
     transition: transform .28s var(--ds-ease-in-out, ease-in-out);
     background: var(--dsw-alias-bg-base, #ffffff);
