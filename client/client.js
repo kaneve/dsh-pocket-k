@@ -50,6 +50,7 @@ var POCKET_ENDPOINTS = Object.freeze({
   restart: "pocket.restart",
   lanTokenRefresh: "token.lanRefresh",
   lanAuthSetEnabled: "lanAuth.setEnabled",
+  lanSetOverride: "lan.setOverride",
   pinSetCustom: "pin.setCustom"
 });
 function compareVersions(a, b) {
@@ -87,6 +88,8 @@ function redactStatus(s) {
     proxyPort: s?.proxyPort ?? null,
     lanUrl: s?.lanUrl ?? null,
     lanQr: s?.lanQr ?? null,
+    lanCandidates: Array.isArray(s?.lanCandidates) ? s.lanCandidates : [],
+    lanIpOverride: s?.lanIpOverride ?? "",
     tunnelRunning: s?.tunnelRunning === true,
     tunnelUrl: s?.tunnelUrl ?? null,
     tunnelQr: s?.tunnelQr ?? null,
@@ -237,6 +240,23 @@ function installAionuiCompat(ctx) {
     return () => {
       document.removeEventListener("click", onTap, true);
       document.removeEventListener("click", onCollapse, true);
+    };
+  });
+  installMobileEffect(ctx, "dsh-mobile-nav: explorer availability (issue #48)", () => {
+    const narrow = window.matchMedia("(max-width: 1023px)");
+    if (!narrow.matches) return () => {
+    };
+    const check = () => {
+      const has = document.querySelector("[data-aionui-explorer-col]") !== null;
+      getFrame()?.setAttribute("data-mobile-nav-explorer", has ? "1" : "0");
+    };
+    check();
+    const timer = window.setTimeout(check, 1500);
+    const observer = new MutationObserver(check);
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => {
+      window.clearTimeout(timer);
+      observer.disconnect();
     };
   });
 }
@@ -1555,6 +1575,12 @@ var COMPAT_CSS = `@media (max-width: 1023px) {
     background: var(--aion-bg-base, #ffffff) !important;
     border-left: none !important;
   }
+  /* \u5BBF\u4E3B\u6CA1\u6709 aionui explorer \u5217\uFF08\u5B98\u65B9 DSH \u4E0D\u5E26 dsh-web-ui\uFF0Cissue #48\uFF09\u65F6\u9690\u85CF
+     \u79FB\u52A8\u7AEF\u300C\u6587\u4EF6\u6D4F\u89C8\u300D\u5165\u53E3\uFF08header \u56FE\u6807 + drawer footer \u9879\uFF09\u2014\u2014\u4E0D\u7136\u70B9\u4E86\u6CA1\u53CD\u5E94\u3002 */
+  [data-mobile-nav-explorer="0"] [data-mobile-nav="files"],
+  [data-mobile-nav-explorer="0"] [data-mobile-nav="explorer"] {
+    display: none !important;
+  }
   /* Explorer (file tree) bottom sheet: bottom edge aligned exactly with
      the composer card's bottom line \u2014 the card sits 36px above the
      viewport bottom (8px composer padding + the 28px stats strip below
@@ -2551,6 +2577,9 @@ var zh2 = {
   "versionRange": "\u5F53\u524D v{cur} \u2192 \u6700\u65B0 v{latest}",
   "lanTitle": "\u{1F4F6} \u5C40\u57DF\u7F51\uFF08\u540C\u4E00 WiFi\uFF09",
   "lanHint": "\u624B\u673A\u8FDE\u63A5\u540C\u4E00 WiFi \u540E\u626B\u7801\u5373\u53EF\u6253\u5F00",
+  "lanAddress": "\u5C40\u57DF\u7F51\u5730\u5740",
+  "lanAddressAuto": "\u81EA\u52A8\uFF08\u63A8\u8350\uFF09",
+  "lanAddressHint": "\u9AD8\u7EA7\u9009\u9879\uFF1A\u4E00\u822C\u4E0D\u9700\u8981\u4FEE\u6539\uFF1B\u4F7F\u7528 Tailscale/VPN \u7B49\u8FDC\u7A0B\u8BBF\u95EE\u65F6\u53EF\u624B\u52A8\u9009\u62E9",
   "lanPin": "\u5C40\u57DF\u7F51\u8BBF\u95EE\u5BC6\u7801",
   "on": "\u5F00",
   "off": "\u5173",
@@ -2609,6 +2638,9 @@ var en2 = {
   "versionRange": "Current v{cur} \u2192 latest v{latest}",
   "lanTitle": "\u{1F4F6} LAN (same Wi-Fi)",
   "lanHint": "Scan to open once your phone is on the same Wi-Fi",
+  "lanAddress": "LAN address",
+  "lanAddressAuto": "Auto (recommended)",
+  "lanAddressHint": "Advanced option: usually no change needed; select manually when accessing through Tailscale/VPN",
   "lanPin": "LAN access PIN",
   "on": "On",
   "off": "Off",
@@ -2817,6 +2849,13 @@ function PocketSettingsTab({ rpcCall, t }) {
     } catch {
     }
   };
+  const setLanAddress = async (ip) => {
+    try {
+      setStatus(await call(POCKET_ENDPOINTS.lanSetOverride, { ip }));
+    } catch (err) {
+      setError(err.message);
+    }
+  };
   const [customPin, setCustomPin] = (0, import_react.useState)(null);
   const saveCustomPin = async (which) => {
     try {
@@ -2925,6 +2964,22 @@ function PocketSettingsTab({ rpcCall, t }) {
         (0, import_react.createElement)("img", { src: status.lanQr, alt: "LAN QR", style: styles.qr }),
         (0, import_react.createElement)("div", { style: styles.code }, lanUrl),
         (0, import_react.createElement)("div", { style: styles.muted }, t("lanHint")),
+        (0, import_react.createElement)(
+          "label",
+          { style: { display: "flex", alignItems: "center", gap: 8, marginTop: 10, fontSize: 12, color: "var(--dsw-alias-label-secondary,#6b7280)" } },
+          t("lanAddress"),
+          (0, import_react.createElement)(
+            "select",
+            {
+              value: status?.lanIpOverride || "",
+              onChange: (e) => setLanAddress(e.target.value),
+              style: { font: "inherit", height: 30, padding: "0 8px", borderRadius: 8, border: "1px solid var(--dsw-alias-border-l2,#d1d5db)", background: "var(--dsw-alias-bg-layer-1,#fff)", color: "var(--dsw-alias-label-primary,inherit)" }
+            },
+            (0, import_react.createElement)("option", { value: "" }, t("lanAddressAuto")),
+            (status?.lanCandidates || []).map((ip) => (0, import_react.createElement)("option", { key: ip, value: ip }, ip))
+          )
+        ),
+        (0, import_react.createElement)("div", { style: { ...styles.muted, marginTop: 2 } }, t("lanAddressHint")),
         // 访问密码开关（issue #24）：默认开启；关闭后扫码直连（仅同一局域网设备可访问）
         (0, import_react.createElement)(
           "div",

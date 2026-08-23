@@ -36,6 +36,12 @@ export const COMPAT_CSS = `@media (max-width: 1023px) {
     background: var(--aion-bg-base, #ffffff) !important;
     border-left: none !important;
   }
+  /* 宿主没有 aionui explorer 列（官方 DSH 不带 dsh-web-ui，issue #48）时隐藏
+     移动端「文件浏览」入口（header 图标 + drawer footer 项）——不然点了没反应。 */
+  [data-mobile-nav-explorer="0"] [data-mobile-nav="files"],
+  [data-mobile-nav-explorer="0"] [data-mobile-nav="explorer"] {
+    display: none !important;
+  }
   /* Explorer (file tree) bottom sheet: bottom edge aligned exactly with
      the composer card's bottom line — the card sits 36px above the
      viewport bottom (8px composer padding + the 28px stats strip below
