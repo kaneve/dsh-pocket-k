@@ -85,3 +85,54 @@ test('setCustomPin / rotateAccessToken（issue #33）：8 位数字自定义 + �
   assert.equal(setCustomPin('lan', '77775555'), '77775555', '局域网自定义成功');
   assert.equal(pinCustom('lan'), true, '局域网标记自定义');
 }));
+
+// ---------- 公网固定地址 publicBaseUrl（named tunnel 入口） ----------
+import { writeFileSync as _wfs12, mkdirSync as _mds12 } from 'node:fs';
+import { dirname as _dirname12 } from 'node:path';
+function writeSettingsRaw(p, obj) {
+  _mds12(_dirname12(p), { recursive: true });
+  _wfs12(p, JSON.stringify(obj), 'utf8');
+}
+
+test('normalizePublicOrigin：合法 https origin 归一化（去尾斜杠），非法返回 null', async () => {
+  const { normalizePublicOrigin } = await import('../lib/settings.mjs');
+  assert.equal(normalizePublicOrigin('https://dsh.example.com'), 'https://dsh.example.com');
+  assert.equal(normalizePublicOrigin('https://dsh.example.com/'), 'https://dsh.example.com', '尾斜杠剥掉');
+  assert.equal(normalizePublicOrigin('  https://dsh.example.com  '), 'https://dsh.example.com', '首尾空白容忍');
+  assert.equal(normalizePublicOrigin('https://dsh.example.com:8443'), 'https://dsh.example.com:8443', '非默认端口保留');
+  assert.equal(normalizePublicOrigin('http://dsh.example.com'), null, 'http 强制拒绝');
+  assert.equal(normalizePublicOrigin('ftp://dsh.example.com'), null);
+  assert.equal(normalizePublicOrigin('dsh.example.com'), null, '无协议拒绝');
+  assert.equal(normalizePublicOrigin('https://dsh.example.com/app'), null, '带路径拒绝');
+  assert.equal(normalizePublicOrigin('https://dsh.example.com/?x=1'), null, '带 query 拒绝');
+  assert.equal(normalizePublicOrigin('https://dsh.example.com/#frag'), null, '带 hash 拒绝');
+  assert.equal(normalizePublicOrigin('https://u:p@dsh.example.com'), null, '带用户信息拒绝');
+  assert.equal(normalizePublicOrigin(''), null);
+  assert.equal(normalizePublicOrigin(null), null);
+});
+
+test('publicBaseUrl：未配置 → null；脏数据 → warn 回落 null；set/clear 持久化', () => withHome(async () => {
+  const { publicBaseUrl, setPublicBaseUrl, clearPublicBaseUrl, settingsPath } = await import('../lib/settings.mjs');
+  const warns = [];
+  const origWarn = console.warn;
+  console.warn = (...a) => warns.push(a.join(' '));
+  try {
+    assert.equal(publicBaseUrl(), null, '未配置');
+    writeSettingsRaw(settingsPath(), { lanAuthEnabled: true, publicBaseUrl: 'http://bad.example.com/path' });
+    assert.equal(publicBaseUrl(), null, '脏数据按未配置处理（畸形值忽略回落）');
+    assert.ok(warns.some((w) => w.includes('publicBaseUrl')), '有告警留痕');
+    assert.equal(setPublicBaseUrl('https://dsh.example.com/'), 'https://dsh.example.com', '归一化后保存');
+    assert.equal(publicBaseUrl(), 'https://dsh.example.com');
+    assert.equal(JSON.parse(readFileSync(settingsPath(), 'utf8')).publicBaseUrl, 'https://dsh.example.com', '已持久化');
+    assert.throws(() => setPublicBaseUrl('http://nope.example.com'), /https/, '非法写入抛错');
+    assert.equal(publicBaseUrl(), 'https://dsh.example.com', '抛错后原值不变');
+    assert.equal(clearPublicBaseUrl(), null);
+    assert.equal(publicBaseUrl(), null);
+    assert.equal(JSON.parse(readFileSync(settingsPath(), 'utf8')).publicBaseUrl, undefined, '清除后文件无此键');
+    setPublicBaseUrl('https://x.example.com');
+    setPublicBaseUrl('');
+    assert.equal(publicBaseUrl(), null, '空串设置 = 清除');
+  } finally {
+    console.warn = origWarn;
+  }
+}));

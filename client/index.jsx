@@ -258,6 +258,25 @@ function PocketSettingsTab({ rpcCall, t }) {
   // 「自定义」按钮（非输入态显示在密码行末尾）
   const customBtn = (which) => h('button', { style: { ...styles.btn, height: 26, padding: '0 10px', fontSize: 12, marginLeft: 8 }, onClick: () => setCustomPin({ which, value: '', err: null }) }, t('customize'));
 
+  // 公网固定地址（named tunnel 入口）：输入态本地暂存，status.publicBase 变化时复位
+  const [baseInput, setBaseInput] = useState(null);
+  const publicBase = status?.publicBase ?? null;
+  useEffect(() => { setBaseInput(null); }, [publicBase]);
+  const savePublicBase = async () => {
+    setBusy(true);
+    setError(null);
+    try { setStatus(await call(POCKET_ENDPOINTS.publicBaseSet, { url: (baseInput ?? '').trim() })); }
+    catch (err) { setError(err.message); }
+    finally { setBusy(false); }
+  };
+  const clearPublicBase = async () => {
+    setBusy(true);
+    setError(null);
+    try { setStatus(await call(POCKET_ENDPOINTS.publicBaseClear, {})); }
+    catch (err) { setError(err.message); }
+    finally { setBusy(false); }
+  };
+
   const lanUrl = status?.lanUrl;
   const tunnelUrl = status?.tunnelUrl;
   const tunnelPhase = tunnelState?.phase ?? 'idle';
@@ -365,6 +384,25 @@ function PocketSettingsTab({ rpcCall, t }) {
     // 公网
     h('div', { style: styles.block },
       h('div', { style: { fontWeight: 600, fontSize: 13 } }, t('wanTitle')),
+      publicBase ? h('div', { style: { marginTop: 2, fontSize: 12, color: 'var(--dsw-alias-label-secondary,#6b7280)' } }, t('fixedMode')) : null,
+      // 公网固定地址（named tunnel）：保存后公网二维码改用此地址，登录状态跨重启保持
+      h('div', { style: { marginTop: 8 } },
+        h('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--dsw-alias-label-secondary,#6b7280)' } }, t('publicBaseTitle')),
+        h('div', { style: { display: 'flex', gap: 8, marginTop: 6 } },
+          h('input', {
+            style: { flex: 1, font: 'inherit', height: 30, padding: '0 10px', fontSize: 12, borderRadius: 8, border: '1px solid var(--dsw-alias-border-l2,#d1d5db)', background: 'var(--dsw-alias-bg-layer-1,#fff)', color: 'var(--dsw-alias-label-primary,inherit)', outline: 'none' },
+            type: 'url',
+            placeholder: t('publicBasePlaceholder'),
+            value: baseInput ?? publicBase ?? '',
+            onChange: (e) => setBaseInput(e.target.value),
+            onKeyDown: (e) => { if (e.key === 'Enter') savePublicBase(); },
+            spellCheck: false,
+          }),
+          h('button', { style: { ...styles.btn, height: 30, padding: '0 12px', fontSize: 12 }, onClick: savePublicBase, disabled: busy || (baseInput ?? '') === (publicBase ?? '') }, t('save')),
+          publicBase ? h('button', { style: { ...styles.btn, height: 30, padding: '0 12px', fontSize: 12 }, onClick: clearPublicBase, disabled: busy }, t('publicBaseClear')) : null,
+        ),
+        h('div', { style: { ...styles.muted, marginTop: 4 } }, t('publicBaseHint')),
+      ),
       tunnelUrl
         ? h('div', null,
           h('img', { src: status.tunnelQr, alt: 'Tunnel QR', style: styles.qr }),
@@ -379,7 +417,14 @@ function PocketSettingsTab({ rpcCall, t }) {
                   status?.publicPinCustom ? h('div', { style: { marginTop: 2, fontSize: 11, color: 'var(--dsw-alias-state-warn-primary,#b45309)' } }, t('pinCustomHint')) : null,
                 ))
             : null,
-          h('button', { style: styles.btn, onClick: stopTunnel }, t('stopTunnel')),
+          status.tunnelRunning
+            ? h('div', { style: { display: 'flex', gap: 8, marginTop: 8 } },
+              h('button', { style: styles.btn, onClick: stopTunnel }, t('stopTunnel')),
+              publicBase ? h('button', { style: styles.btn, onClick: startTunnel, disabled: busy || tunnelStarting }, busy ? t('opening') : t('enableBackup')) : null,
+            )
+            : (publicBase
+              ? h('button', { style: { ...styles.btn, margin: '8px 0' }, onClick: startTunnel, disabled: busy || tunnelStarting }, busy ? t('opening') : t('enableBackup'))
+              : null),
         )
         : h('div', null,
           h('button', { style: { ...styles.primary, margin: '8px 0' }, onClick: startTunnel, disabled: busy || tunnelStarting }, busy ? t('opening') : t('enable')),

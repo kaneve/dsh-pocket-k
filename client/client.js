@@ -51,7 +51,10 @@ var POCKET_ENDPOINTS = Object.freeze({
   lanTokenRefresh: "token.lanRefresh",
   lanAuthSetEnabled: "lanAuth.setEnabled",
   lanSetOverride: "lan.setOverride",
-  pinSetCustom: "pin.setCustom"
+  pinSetCustom: "pin.setCustom",
+  publicBaseGet: "pocket.publicBase.get",
+  publicBaseSet: "pocket.publicBase.set",
+  publicBaseClear: "pocket.publicBase.clear"
 });
 function compareVersions(a, b) {
   const pa = String(a).replace(/^[vV]/, "").split(".");
@@ -94,6 +97,7 @@ function redactStatus(s) {
     tunnelUrl: s?.tunnelUrl ?? null,
     tunnelQr: s?.tunnelQr ?? null,
     tunnelState: s?.tunnelState ?? { phase: "idle" },
+    publicBase: s?.publicBase ?? null,
     dshPort: s?.dshPort ?? null
   };
 }
@@ -2611,6 +2615,12 @@ var zh2 = {
   "wanHint": "\u4EFB\u4F55\u7F51\u7EDC\u626B\u7801\u5373\u7528\uFF08URL \u6BCF\u6B21\u91CD\u542F\u81EA\u52A8\u6362\u65B0\uFF09",
   "wanPin": "\u{1F510} \u8BBF\u95EE\u5BC6\u7801\uFF1A{pin}\uFF08\u6BCF\u6B21\u5F00\u542F\u516C\u7F51\u53D8\u65B0\uFF1B\u624B\u673A\u6253\u5F00\u94FE\u63A5\u9700\u8F93\u5165\u6B64\u5BC6\u7801\uFF09",
   "wanPinCustom": "\u{1F510} \u8BBF\u95EE\u5BC6\u7801\uFF1A{pin}\uFF08\u81EA\u5B9A\u4E49\uFF0C\u5F00\u542F\u516C\u7F51\u4E0D\u518D\u81EA\u52A8\u6362\u65B0\uFF09",
+  "fixedMode": "\u56FA\u5B9A\u57DF\u540D\u6A21\u5F0F\uFF08\u624B\u52A8 named tunnel\uFF09",
+  "publicBaseTitle": "\u516C\u7F51\u56FA\u5B9A\u5730\u5740",
+  "publicBasePlaceholder": "https://dsh.example.com",
+  "publicBaseClear": "\u6E05\u9664",
+  "publicBaseHint": "\u5728 Cloudflare \u63A7\u5236\u53F0\u521B\u5EFA named tunnel \u5E76\u6307\u5411\u672C\u673A 3081 \u7AEF\u53E3\uFF1B\u57DF\u540D\u9700\u6258\u7BA1\u5728 Cloudflare\uFF1B\u5927\u9646\u53EF\u8FBE\u6027\u8BF7\u81EA\u6D4B\u3002\u4FDD\u5B58\u540E\u516C\u7F51\u4E8C\u7EF4\u7801\u6539\u7528\u6B64\u5730\u5740\uFF0C\u767B\u5F55\u72B6\u6001\u8DE8\u91CD\u542F\u4FDD\u6301\u3002",
+  "enableBackup": "\u5F00\u542F\u5FEB\u901F\u96A7\u9053\uFF08\u5907\u7528\uFF09",
   "stopTunnel": "\u5173\u95ED\u516C\u7F51",
   "enable": "\u5F00\u542F\u516C\u7F51\u8BBF\u95EE",
   "opening": "\u5F00\u542F\u4E2D\u2026",
@@ -2672,6 +2682,12 @@ var en2 = {
   "wanHint": "Scan from any network (the URL changes on every restart)",
   "wanPin": "\u{1F510} PIN: {pin} (changes each time the tunnel is enabled; required on the phone)",
   "wanPinCustom": "\u{1F510} PIN: {pin} (custom \u2014 not rotated on tunnel start)",
+  "fixedMode": "Fixed-domain mode (manual named tunnel)",
+  "publicBaseTitle": "Public fixed address",
+  "publicBasePlaceholder": "https://dsh.example.com",
+  "publicBaseClear": "Remove",
+  "publicBaseHint": "Create a named tunnel in the Cloudflare dashboard pointing at local port 3081; the domain must be hosted on Cloudflare (reachability from mainland China may vary). Once saved, the public QR code uses this address and your login survives restarts.",
+  "enableBackup": "Start quick tunnel (backup)",
   "stopTunnel": "Stop",
   "enable": "Enable anywhere",
   "opening": "Enabling\u2026",
@@ -2907,6 +2923,33 @@ function PocketSettingsTab({ rpcCall, t }) {
     customPin?.err ? (0, import_react.createElement)("div", { style: { color: "var(--dsw-alias-state-error-primary,#dc2626)", marginTop: 4 } }, customPin.err) : null
   );
   const customBtn = (which) => (0, import_react.createElement)("button", { style: { ...styles.btn, height: 26, padding: "0 10px", fontSize: 12, marginLeft: 8 }, onClick: () => setCustomPin({ which, value: "", err: null }) }, t("customize"));
+  const [baseInput, setBaseInput] = (0, import_react.useState)(null);
+  const publicBase = status?.publicBase ?? null;
+  (0, import_react.useEffect)(() => {
+    setBaseInput(null);
+  }, [publicBase]);
+  const savePublicBase = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      setStatus(await call(POCKET_ENDPOINTS.publicBaseSet, { url: (baseInput ?? "").trim() }));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const clearPublicBase = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      setStatus(await call(POCKET_ENDPOINTS.publicBaseClear, {}));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
   const lanUrl = status?.lanUrl;
   const tunnelUrl = status?.tunnelUrl;
   const tunnelPhase = tunnelState?.phase ?? "idle";
@@ -3025,6 +3068,31 @@ function PocketSettingsTab({ rpcCall, t }) {
       "div",
       { style: styles.block },
       (0, import_react.createElement)("div", { style: { fontWeight: 600, fontSize: 13 } }, t("wanTitle")),
+      publicBase ? (0, import_react.createElement)("div", { style: { marginTop: 2, fontSize: 12, color: "var(--dsw-alias-label-secondary,#6b7280)" } }, t("fixedMode")) : null,
+      // 公网固定地址（named tunnel）：保存后公网二维码改用此地址，登录状态跨重启保持
+      (0, import_react.createElement)(
+        "div",
+        { style: { marginTop: 8 } },
+        (0, import_react.createElement)("div", { style: { fontSize: 12, fontWeight: 600, color: "var(--dsw-alias-label-secondary,#6b7280)" } }, t("publicBaseTitle")),
+        (0, import_react.createElement)(
+          "div",
+          { style: { display: "flex", gap: 8, marginTop: 6 } },
+          (0, import_react.createElement)("input", {
+            style: { flex: 1, font: "inherit", height: 30, padding: "0 10px", fontSize: 12, borderRadius: 8, border: "1px solid var(--dsw-alias-border-l2,#d1d5db)", background: "var(--dsw-alias-bg-layer-1,#fff)", color: "var(--dsw-alias-label-primary,inherit)", outline: "none" },
+            type: "url",
+            placeholder: t("publicBasePlaceholder"),
+            value: baseInput ?? publicBase ?? "",
+            onChange: (e) => setBaseInput(e.target.value),
+            onKeyDown: (e) => {
+              if (e.key === "Enter") savePublicBase();
+            },
+            spellCheck: false
+          }),
+          (0, import_react.createElement)("button", { style: { ...styles.btn, height: 30, padding: "0 12px", fontSize: 12 }, onClick: savePublicBase, disabled: busy || (baseInput ?? "") === (publicBase ?? "") }, t("save")),
+          publicBase ? (0, import_react.createElement)("button", { style: { ...styles.btn, height: 30, padding: "0 12px", fontSize: 12 }, onClick: clearPublicBase, disabled: busy }, t("publicBaseClear")) : null
+        ),
+        (0, import_react.createElement)("div", { style: { ...styles.muted, marginTop: 4 } }, t("publicBaseHint"))
+      ),
       tunnelUrl ? (0, import_react.createElement)(
         "div",
         null,
@@ -3038,7 +3106,12 @@ function PocketSettingsTab({ rpcCall, t }) {
           customBtn("public"),
           status?.publicPinCustom ? (0, import_react.createElement)("div", { style: { marginTop: 2, fontSize: 11, color: "var(--dsw-alias-state-warn-primary,#b45309)" } }, t("pinCustomHint")) : null
         ) : null,
-        (0, import_react.createElement)("button", { style: styles.btn, onClick: stopTunnel }, t("stopTunnel"))
+        status.tunnelRunning ? (0, import_react.createElement)(
+          "div",
+          { style: { display: "flex", gap: 8, marginTop: 8 } },
+          (0, import_react.createElement)("button", { style: styles.btn, onClick: stopTunnel }, t("stopTunnel")),
+          publicBase ? (0, import_react.createElement)("button", { style: styles.btn, onClick: startTunnel, disabled: busy || tunnelStarting }, busy ? t("opening") : t("enableBackup")) : null
+        ) : publicBase ? (0, import_react.createElement)("button", { style: { ...styles.btn, margin: "8px 0" }, onClick: startTunnel, disabled: busy || tunnelStarting }, busy ? t("opening") : t("enableBackup")) : null
       ) : (0, import_react.createElement)(
         "div",
         null,

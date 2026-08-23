@@ -741,3 +741,28 @@ Ethernet adapter WLAN:
   }
   assert.equal(detectWsl(), false, '非 WSL 环境返回 false（macOS 无 /proc/version microsoft 标记）');
 });
+
+test('公网固定地址：status.publicBase 生效——二维码/URL 改用固定 origin（快速隧道没跑也有码）', async () => {
+  const qrTexts = [];
+  const internals = {
+    encodeQr: async (text) => {
+      qrTexts.push(text);
+      return `data:image/png;base64,${Buffer.from(text).toString('base64')}`;
+    },
+  };
+  const service = createPocketService({
+    dshPort: 3080, port: 3081, internals,
+    getPublicBaseUrl: () => 'https://dsh.example.com',
+  });
+  const s = await service.status();
+  assert.equal(s.publicBase, 'https://dsh.example.com');
+  assert.equal(s.tunnelUrl, 'https://dsh.example.com', '公网 URL 优先用固定 origin');
+  assert.equal(s.tunnelRunning, false, '快速隧道未跑');
+  assert.ok(s.tunnelQr?.startsWith('data:image/png;base64,'), '固定模式下也生成二维码');
+  assert.ok(qrTexts.includes('https://dsh.example.com'), '二维码内容是固定 origin');
+  // 未注入 getter → 与旧行为一致（publicBase=null、无隧道时 URL=null）
+  const legacy = await createPocketService({ dshPort: 3080, port: 3082, internals }).status();
+  assert.equal(legacy.publicBase, null);
+  assert.equal(legacy.tunnelUrl, null);
+  assert.equal(legacy.tunnelQr, null);
+});

@@ -688,3 +688,50 @@ test('advancedNoticeScript：注入 advanced 模式提示覆盖层（issue #19�
   assert.ok(s.includes('compatibility'), '提示切回 compatibility');
   assert.ok(s.includes('position:fixed'), '固定覆盖层（白屏也能看到）');
 });
+
+test('固定域名入口围栏：sessionKeyFor 按 Host 解析——固定域名用持久 key，其余回退 sessionKey', async () => {
+  const http = await import('node:http');
+  const crypto = await import('node:crypto');
+  const TOKEN = '12345678';
+  const up = createServer((req, res) => { res.writeHead(200); res.end('ok'); });
+  await new Promise((r) => up.listen(0, '127.0.0.1', r));
+  let stableCalls = 0;
+  const proxy = await createPocketProxy({
+    port: 0, host: '127.0.0.1',
+    upstream: { host: '127.0.0.1', port: up.address().port },
+    auth: {
+      getToken: () => TOKEN,
+      isProtected: () => true,
+      sessionKey: 'process-key',
+      sessionKeyFor: (host) => {
+        if (/^fixed\.example\.com$/i.test(String(host))) { stableCalls++; return 'stable-key'; }
+        return undefined;
+      },
+    },
+  });
+  const login = (host) => new Promise((resolve, reject) => {
+    const body = `token=${TOKEN}`;
+    const req = http.request({
+      host: '127.0.0.1', port: proxy.port, path: '/pocket-login', method: 'POST',
+      headers: { Host: host, 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body) },
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => resolve(res.headers['set-cookie']?.[0] ?? null));
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+  const expectedCookie = (key) => crypto.createHash('sha256').update(`${TOKEN}:${key}`).digest('hex');
+  try {
+    const cFixed = await login('fixed.example.com');
+    assert.ok(cFixed.includes(expectedCookie('stable-key')), `固定域名 cookie 绑定持久 key（实际 ${cFixed}）`);
+    const cOther = await login('abc.trycloudflare.com');
+    assert.ok(cOther.includes(expectedCookie('process-key')), `其余 Host 回退进程级 key（实际 ${cOther}）`);
+    assert.ok(stableCalls >= 1, 'sessionKeyFor 被固定域名请求调用过');
+  } finally {
+    await proxy.close();
+    await new Promise((r) => up.close(r));
+  }
+});

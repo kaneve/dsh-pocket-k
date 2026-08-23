@@ -12,6 +12,9 @@ export const POCKET_ENDPOINTS = Object.freeze({
   lanAuthSetEnabled: 'lanAuth.setEnabled',
   lanSetOverride: 'lan.setOverride',
   pinSetCustom: 'pin.setCustom',
+  publicBaseGet: 'pocket.publicBase.get',
+  publicBaseSet: 'pocket.publicBase.set',
+  publicBaseClear: 'pocket.publicBase.clear',
 });
 
 /** 语义化版本比较：a > b 返回正数，相等 0，a < b 负数（数字段 + 预发布后缀）。 */
@@ -61,6 +64,7 @@ export function redactStatus(s) {
     tunnelUrl: s?.tunnelUrl ?? null,
     tunnelQr: s?.tunnelQr ?? null,
     tunnelState: s?.tunnelState ?? { phase: 'idle' },
+    publicBase: s?.publicBase ?? null,
     dshPort: s?.dshPort ?? null,
   };
 }
