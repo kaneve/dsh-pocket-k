@@ -3,3 +3,8 @@ fork-commit: 0d103973c624d2add832b8b96c498ecc45e458a0 (main)
 version: 2.0.0
 date: 2026-08-22
 upstream: mexiaosqwq/dsh-web-mobile (MIT)
+
+local-deviations:
+  - PR#42: styles/layout.css.ts + styles/base.css.ts — mobile drawer/backdrop z-index raised above third-party overlay z500 (drawer 600, backdrop 590)
+  - #48: effects/aionui-compat.ts + styles/compat.css.ts — hide files/explorer entries when host has no aionui explorer; Files closes the drawer
+  - t17: effects/stats-line.ts — compact session stats labels (LLM→模型, 工具调用→工具, TTFT removed, tok/s→t/s, 缓存命中→缓中, 输入→入, 输出→出, tok→t), remove TTFT-only groups; styles/compat.css.ts — stats strip font-size 12→11px, tighter gap/padding, horizontal scroll retained
