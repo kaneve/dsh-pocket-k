@@ -43,9 +43,9 @@ function publicBaseError(raw) {
   }
 }
 
-/** 当前公网入口对应 Host：固定域名优先，其次当前隧道 URL。 */
+/** 当前公网入口对应 Host：实际在跑的隧道优先，其次固定域名，最后展示用隧道 URL。 */
 function publicHostOf(status) {
-  const raw = status?.publicBase || status?.tunnelUrl || null;
+  const raw = status?.activeTunnelUrl || status?.publicBase || status?.tunnelUrl || null;
   if (!raw) return null;
   try { return new URL(raw).host; } catch { return null; }
 }

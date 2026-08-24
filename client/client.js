@@ -2856,7 +2856,7 @@ function publicBaseError(raw) {
   }
 }
 function publicHostOf(status) {
-  const raw = status?.publicBase || status?.tunnelUrl || null;
+  const raw = status?.activeTunnelUrl || status?.publicBase || status?.tunnelUrl || null;
   if (!raw) return null;
   try {
     return new URL(raw).host;
