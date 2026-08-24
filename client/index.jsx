@@ -27,6 +27,32 @@ function fmt(t, key, vars) {
   }
   return s;
 }
+// 公网固定地址前端校验：返回具体错误 key（空值不算错误，允许用于清除）；
+// 与 lib/settings.mjs normalizePublicOrigin 的规则保持一致。
+function publicBaseError(raw) {
+  const s = String(raw ?? '').trim();
+  if (!s) return null;
+  try {
+    const u = new URL(s);
+    if (u.protocol !== 'https:') return 'publicBaseErrProtocol';
+    if ((u.pathname && u.pathname !== '/') || u.search || u.hash) return 'publicBaseErrPath';
+    if (u.username || u.password) return 'publicBaseErrAuth';
+    return null;
+  } catch {
+    return 'publicBaseErrUrl';
+  }
+}
+
+/** 当前公网入口对应 Host：固定域名优先，其次当前隧道 URL。 */
+function publicHostOf(status) {
+  const raw = status?.publicBase || status?.tunnelUrl || null;
+  if (!raw) return null;
+  try { return new URL(raw).host; } catch { return null; }
+}
+
+function formatTime(ts) {
+  try { return new Date(ts).toLocaleString(); } catch { return String(ts ?? ''); }
+}
 
 // 官方 DeepSeek Harness 设计系统（dsh-client-ui-theme design-platform.css）：
 // 按钮 md=36px 胶囊形 / sm=28px；品牌色 --dsw-alias-brand-primary；
@@ -53,6 +79,11 @@ function PocketSettingsTab({ rpcCall, t }) {
   const [updateInfo, setUpdateInfo] = useState(null); // { current, latest, updating, result, startedAt } | null
   const [isDesktop, setIsDesktop] = useState(false); // DSH Desktop（Electron）环境：更新/重启由桌面版管理
   const [now, setNow] = useState(Date.now()); // 每秒 tick，驱动倒计时
+  // 已配对设备（仅显示当前公网入口对应的设备；在线 = 10 分钟内有活动）
+  const [devices, setDevices] = useState(null);
+  const [deviceHost, setDeviceHost] = useState(null);
+  const [revokeTarget, setRevokeTarget] = useState(null); // Device | 'all' | null
+  const [revokeBusy, setRevokeBusy] = useState(false);
 
   // 进行中操作的「已等待 X 秒」倒计时
   useEffect(() => {
@@ -263,6 +294,7 @@ function PocketSettingsTab({ rpcCall, t }) {
   const publicBase = status?.publicBase ?? null;
   useEffect(() => { setBaseInput(null); }, [publicBase]);
   const savePublicBase = async () => {
+    if (baseError) return;
     setBusy(true);
     setError(null);
     try { setStatus(await call(POCKET_ENDPOINTS.publicBaseSet, { url: (baseInput ?? '').trim() })); }
@@ -275,6 +307,50 @@ function PocketSettingsTab({ rpcCall, t }) {
     try { setStatus(await call(POCKET_ENDPOINTS.publicBaseClear, {})); }
     catch (err) { setError(err.message); }
     finally { setBusy(false); }
+  };
+  const publicHost = publicHostOf(status);
+  const baseValue = baseInput ?? publicBase ?? '';
+  const baseError = baseInput !== null ? publicBaseError(baseValue) : null;
+
+  // 设备列表轮询：跟随当前公网入口 Host（固定域名或快速隧道），3 秒刷新在线状态
+  useEffect(() => {
+    let alive = true;
+    const fetchDevices = async () => {
+      setDeviceHost(publicHost);
+      if (!publicHost) {
+        if (alive) setDevices([]);
+        return;
+      }
+      try {
+        const list = await call(POCKET_ENDPOINTS.deviceList, { host: publicHost });
+        if (alive) setDevices(list);
+      } catch {
+        if (alive) setDevices([]);
+      }
+    };
+    fetchDevices();
+    const timer = setInterval(fetchDevices, 3000);
+    return () => { alive = false; clearInterval(timer); };
+  }, [publicHost]);
+
+  const confirmRevokeDevice = async () => {
+    if (!revokeTarget) return;
+    setRevokeBusy(true);
+    setError(null);
+    try {
+      if (revokeTarget === 'all') {
+        if (publicHost) await call(POCKET_ENDPOINTS.deviceRevokeAll, { host: publicHost });
+      } else {
+        await call(POCKET_ENDPOINTS.deviceRevoke, { id: revokeTarget.id });
+      }
+      setRevokeTarget(null);
+      const list = publicHost ? await call(POCKET_ENDPOINTS.deviceList, { host: publicHost }) : [];
+      setDevices(list);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setRevokeBusy(false);
+    }
   };
 
   const lanUrl = status?.lanUrl;
@@ -383,8 +459,15 @@ function PocketSettingsTab({ rpcCall, t }) {
 
     // 公网
     h('div', { style: styles.block },
-      h('div', { style: { fontWeight: 600, fontSize: 13 } }, t('wanTitle')),
-      publicBase ? h('div', { style: { marginTop: 2, fontSize: 12, color: 'var(--dsw-alias-label-secondary,#6b7280)' } }, t('fixedMode')) : null,
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, fontSize: 13 } },
+        t('wanTitle'),
+        publicBase
+          ? h('span', { style: { display: 'inline-block', marginLeft: 8, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: 'var(--dsw-alias-brand-primary,#4f6ef7)', color: '#fff' } }, t('fixedMode'))
+          : tunnelUrl
+            ? h('span', { style: { display: 'inline-block', marginLeft: 8, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: 'var(--dsw-alias-state-warn-primary,#b45309)', color: '#fff' } }, t('randomMode'))
+            : null,
+      ),
+      
       // 公网固定地址（named tunnel）：保存后公网二维码改用此地址，登录状态跨重启保持
       h('div', { style: { marginTop: 8 } },
         h('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--dsw-alias-label-secondary,#6b7280)' } }, t('publicBaseTitle')),
@@ -393,14 +476,15 @@ function PocketSettingsTab({ rpcCall, t }) {
             style: { flex: 1, font: 'inherit', height: 30, padding: '0 10px', fontSize: 12, borderRadius: 8, border: '1px solid var(--dsw-alias-border-l2,#d1d5db)', background: 'var(--dsw-alias-bg-layer-1,#fff)', color: 'var(--dsw-alias-label-primary,inherit)', outline: 'none' },
             type: 'url',
             placeholder: t('publicBasePlaceholder'),
-            value: baseInput ?? publicBase ?? '',
+            value: baseValue,
             onChange: (e) => setBaseInput(e.target.value),
             onKeyDown: (e) => { if (e.key === 'Enter') savePublicBase(); },
             spellCheck: false,
           }),
-          h('button', { style: { ...styles.btn, height: 30, padding: '0 12px', fontSize: 12 }, onClick: savePublicBase, disabled: busy || (baseInput ?? '') === (publicBase ?? '') }, t('save')),
+          h('button', { style: { ...styles.btn, height: 30, padding: '0 12px', fontSize: 12 }, onClick: savePublicBase, disabled: busy || !!baseError || (baseInput ?? '') === (publicBase ?? '') }, t('save')),
           publicBase ? h('button', { style: { ...styles.btn, height: 30, padding: '0 12px', fontSize: 12 }, onClick: clearPublicBase, disabled: busy }, t('publicBaseClear')) : null,
         ),
+        baseError ? h('div', { style: { color: 'var(--dsw-alias-state-error-primary,#dc2626)', fontSize: 12, marginTop: 4 } }, t(baseError)) : null,
         h('div', { style: { ...styles.muted, marginTop: 4 } }, t('publicBaseHint')),
       ),
       tunnelUrl
@@ -439,6 +523,31 @@ function PocketSettingsTab({ rpcCall, t }) {
               : null,
         ),
     ),
+    // 已配对设备（t14）：仅当前公网入口 Host；逐台/全部撤销
+    h('div', { style: styles.block },
+      h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 } },
+        h('div', { style: { fontWeight: 600, fontSize: 13 } }, t('devicesTitle')),
+        publicHost && devices?.length ? h('button', { style: { ...styles.btn, height: 28, padding: '0 12px', fontSize: 12 }, onClick: () => setRevokeTarget('all'), disabled: revokeBusy }, t('deviceRevokeAll')) : null,
+      ),
+      h('div', { style: { ...styles.muted, marginTop: 4 } }, t('devicesHint')),
+      devices === null
+        ? h('div', { style: { ...styles.muted, marginTop: 8 } }, t('devicesLoading'))
+        : devices.length === 0
+          ? h('div', { style: { ...styles.muted, marginTop: 8 } }, t('devicesEmpty'))
+          : h('div', { style: { marginTop: 8 } },
+              devices.map((d) => h('div', { key: d.id, style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '8px 0', borderBottom: '1px solid var(--dsw-alias-border-l2,#e5e7eb)' } },
+                h('div', null,
+                  h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 500 } },
+                    d.name,
+                    h('span', { style: { width: 8, height: 8, borderRadius: 999, background: d.online ? '#16a34a' : '#9ca3af', display: 'inline-block' } }),
+                    h('span', { style: { fontSize: 11, fontWeight: 400, color: d.online ? '#16a34a' : 'var(--dsw-alias-label-tertiary,#8b93a1)' } }, d.online ? t('deviceOnline') : t('deviceOffline')),
+                  ),
+                  h('div', { style: { ...styles.muted, marginTop: 2 } }, fmt(t, 'deviceMeta', { first: formatTime(d.createdAt), last: formatTime(d.lastSeenAt) })),
+                ),
+                h('button', { style: { ...styles.btn, height: 26, padding: '0 10px', fontSize: 12 }, onClick: () => setRevokeTarget(d), disabled: revokeBusy }, t('deviceRevoke')),
+              )),
+            ),
+    ),
 
     error ? h('div', { style: { color: 'var(--dsw-alias-state-error-primary,#dc2626)', fontSize: 12, marginTop: 8 } }, `❌ ${error}`) : null,
 
@@ -460,6 +569,17 @@ function PocketSettingsTab({ rpcCall, t }) {
           }, t('disclaimerAgree')),
         ),
         !disclaimerChecked ? h('div', { style: { marginTop: 8, fontSize: 12, color: 'var(--dsw-alias-state-error-primary,#dc2626)' } }, t('disclaimerHint')) : null,
+      ),
+    ) : null,
+    // 撤销设备确认弹层（t14）：撤销后该设备下次访问需重新输入 PIN
+    revokeTarget ? h('div', { style: { position: 'fixed', inset: 0, zIndex: 10000, background: 'rgba(0,0,0,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 } },
+      h('div', { style: { background: 'var(--dsw-alias-bg-layer-1,#fff)', borderRadius: 12, maxWidth: 420, width: '100%', padding: '20px 22px', boxShadow: '0 8px 32px rgba(0,0,0,.18)' } },
+        h('div', { style: { fontWeight: 600, fontSize: 15, color: 'var(--dsw-alias-state-error-primary,#dc2626)', marginBottom: 10 } }, revokeTarget === 'all' ? t('deviceRevokeAllTitle') : t('deviceRevokeTitle')),
+        h('div', { style: { fontSize: 13, lineHeight: 1.7, color: 'var(--dsw-alias-label-primary,inherit)' } }, revokeTarget === 'all' ? t('deviceRevokeAllBody') : t('deviceRevokeBody')),
+        h('div', { style: { display: 'flex', gap: 8, marginTop: 16 } },
+          h('button', { style: { ...styles.btn, flex: 1 }, onClick: () => setRevokeTarget(null), disabled: revokeBusy }, t('cancel')),
+          h('button', { style: { ...styles.primary, flex: 1, background: 'var(--dsw-alias-state-error-primary,#dc2626)' }, onClick: confirmRevokeDevice, disabled: revokeBusy }, revokeBusy ? t('revoking') : (revokeTarget === 'all' ? t('deviceRevokeAll') : t('deviceRevoke'))),
+        ),
       ),
     ) : null,
 
