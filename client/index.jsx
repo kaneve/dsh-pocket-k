@@ -27,6 +27,32 @@ function fmt(t, key, vars) {
   }
   return s;
 }
+// 公网固定地址前端校验：返回具体错误 key（空值不算错误，允许用于清除）；
+// 与 lib/settings.mjs normalizePublicOrigin 的规则保持一致。
+function publicBaseError(raw) {
+  const s = String(raw ?? '').trim();
+  if (!s) return null;
+  try {
+    const u = new URL(s);
+    if (u.protocol !== 'https:') return 'publicBaseErrProtocol';
+    if (u.pathname !== '/' || /\/$/.test(s) || u.search || u.hash) return 'publicBaseErrPath';
+    if (u.username || u.password) return 'publicBaseErrAuth';
+    return null;
+  } catch {
+    return 'publicBaseErrUrl';
+  }
+}
+
+/** 当前公网入口对应 Host：实际在跑的隧道优先，其次固定域名，最后展示用隧道 URL。 */
+function publicHostOf(status) {
+  const raw = status?.activeTunnelUrl || status?.publicBase || status?.tunnelUrl || null;
+  if (!raw) return null;
+  try { return new URL(raw).host; } catch { return null; }
+}
+
+function formatTime(ts) {
+  try { return new Date(ts).toLocaleString(); } catch { return String(ts ?? ''); }
+}
 
 // 官方 DeepSeek Harness 设计系统（dsh-client-ui-theme design-platform.css）：
 // 按钮 md=36px 胶囊形 / sm=28px；品牌色 --dsw-alias-brand-primary；
@@ -47,12 +73,18 @@ const styles = {
 function PocketSettingsTab({ rpcCall, t }) {
   const [status, setStatus] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [lanBusy, setLanBusy] = useState(false); // 局域网访问总开关切换中
   const [error, setError] = useState(null);
   const [tunnelState, setTunnelState] = useState(null); // 隧道进度 {phase, detail, startedAt}
   const [restartNotice, setRestartNotice] = useState(false); // 重启后提示
   const [updateInfo, setUpdateInfo] = useState(null); // { current, latest, updating, result, startedAt } | null
   const [isDesktop, setIsDesktop] = useState(false); // DSH Desktop（Electron）环境：更新/重启由桌面版管理
   const [now, setNow] = useState(Date.now()); // 每秒 tick，驱动倒计时
+  // 已配对设备（仅显示当前公网入口对应的设备；在线 = 10 分钟内有活动）
+  const [devices, setDevices] = useState(null);
+  const [deviceHost, setDeviceHost] = useState(null);
+  const [revokeTarget, setRevokeTarget] = useState(null); // Device | 'all' | null
+  const [revokeBusy, setRevokeBusy] = useState(false);
 
   // 进行中操作的「已等待 X 秒」倒计时
   useEffect(() => {
@@ -168,27 +200,29 @@ function PocketSettingsTab({ rpcCall, t }) {
   const [disclaimerOpen, setDisclaimerOpen] = useState(false);
   const [disclaimerChecked, setDisclaimerChecked] = useState(false);
 
-  const doStartTunnel = async () => {
+  const doStartTunnel = async (quick = false) => {
     setBusy(true);
     setError(null);
     setTunnelState({ phase: 'starting', detail: '正在开启…', startedAt: Date.now() });
     try {
-      setStatus(await call(POCKET_ENDPOINTS.tunnelStart, { disclaimer: true }));
+      setStatus(await call(POCKET_ENDPOINTS.tunnelStart, { disclaimer: true, ...(quick ? { quick: true } : {}) }));
     } catch (err) {
       setError(err.message);
     } finally {
       setBusy(false);
     }
   };
-  const startTunnel = () => {
+  const [startMode, setStartMode] = useState('fixed'); // 'fixed' | 'quick'：免责弹框后按此模式开启
+  const startTunnel = (quick = false) => {
     // 每次开启都弹免责确认（勾选后才能继续）
+    setStartMode(quick ? 'quick' : 'fixed');
     setDisclaimerChecked(false);
     setDisclaimerOpen(true);
   };
   const confirmDisclaimer = () => {
     if (!disclaimerChecked) return; // 未勾选不允许
     setDisclaimerOpen(false);
-    doStartTunnel();
+    doStartTunnel(startMode === 'quick');
   };
 
   const stopTunnel = async () => {
@@ -209,6 +243,18 @@ function PocketSettingsTab({ rpcCall, t }) {
       const r = await call(POCKET_ENDPOINTS.lanAuthSetEnabled, { on });
       setStatus((s) => ({ ...s, lanAuthEnabled: r.lanAuthEnabled }));
     } catch { /* 忽略 */ }
+  };
+
+  // 局域网访问总开关：关闭后代理只绑 127.0.0.1（手机无法连局域网；公网隧道不受影响）
+  const setLanAccess = async (on) => {
+    setLanBusy(true);
+    try {
+      setStatus(await call(POCKET_ENDPOINTS.lanSetEnabled, { on }));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLanBusy(false);
+    }
   };
 
   // 局域网地址手动覆盖（Tailscale/VPN 等远程访问场景）：空值恢复自动选择
@@ -258,6 +304,99 @@ function PocketSettingsTab({ rpcCall, t }) {
   // 「自定义」按钮（非输入态显示在密码行末尾）
   const customBtn = (which) => h('button', { style: { ...styles.btn, height: 26, padding: '0 10px', fontSize: 12, marginLeft: 8 }, onClick: () => setCustomPin({ which, value: '', err: null }) }, t('customize'));
 
+  // 公网固定地址（named tunnel 入口）：输入态本地暂存，status.publicBase 变化时复位
+  const [baseInput, setBaseInput] = useState(null);
+  const publicBase = status?.publicBase ?? null;
+  useEffect(() => { setBaseInput(null); }, [publicBase]);
+  const savePublicBase = async () => {
+    if (baseError) return;
+    setBusy(true);
+    setError(null);
+    try { setStatus(await call(POCKET_ENDPOINTS.publicBaseSet, { url: (baseInput ?? '').trim() })); }
+    catch (err) { setError(err.message); }
+    finally { setBusy(false); }
+  };
+  const clearPublicBase = async () => {
+    setBusy(true);
+    setError(null);
+    try { setStatus(await call(POCKET_ENDPOINTS.publicBaseClear, {})); }
+    catch (err) { setError(err.message); }
+    finally { setBusy(false); }
+  };
+  // Cloudflare named tunnel 自动配置（CLI login / API Token 双模式）
+  const cfMode = status?.cfMode ?? null;
+  const cfTokenSet = !!status?.cfTokenSet;
+  const [cfTokenInput, setCfTokenInput] = useState('');
+  const [cfBusy, setCfBusy] = useState(false);
+  const saveCfMode = async (mode) => {
+    setCfBusy(true);
+    setError(null);
+    try { setStatus(await call(POCKET_ENDPOINTS.cfModeSet, { mode })); }
+    catch (err) { setError(err.message); }
+    finally { setCfBusy(false); }
+  };
+  const saveCfToken = async () => {
+    const token = (cfTokenInput ?? '').trim();
+    if (!token) return;
+    setCfBusy(true);
+    setError(null);
+    try { setStatus(await call(POCKET_ENDPOINTS.cfTokenSet, { token })); setCfTokenInput(''); }
+    catch (err) { setError(err.message); }
+    finally { setCfBusy(false); }
+  };
+  const clearCfToken = async () => {
+    setCfBusy(true);
+    setError(null);
+    try { setStatus(await call(POCKET_ENDPOINTS.cfTokenClear, {})); }
+    catch (err) { setError(err.message); }
+    finally { setCfBusy(false); }
+  };
+
+  const publicHost = publicHostOf(status);
+  const baseValue = baseInput ?? publicBase ?? '';
+  const baseError = baseInput !== null ? publicBaseError(baseValue) : null;
+
+  // 设备列表轮询：跟随当前公网入口 Host（固定域名或快速隧道），3 秒刷新在线状态
+  useEffect(() => {
+    let alive = true;
+    const fetchDevices = async () => {
+      setDeviceHost(publicHost);
+      if (!publicHost) {
+        if (alive) setDevices([]);
+        return;
+      }
+      try {
+        const list = await call(POCKET_ENDPOINTS.deviceList, { host: publicHost });
+        if (alive) setDevices(list);
+      } catch {
+        if (alive) setDevices([]);
+      }
+    };
+    fetchDevices();
+    const timer = setInterval(fetchDevices, 3000);
+    return () => { alive = false; clearInterval(timer); };
+  }, [publicHost]);
+
+  const confirmRevokeDevice = async () => {
+    if (!revokeTarget) return;
+    setRevokeBusy(true);
+    setError(null);
+    try {
+      if (revokeTarget === 'all') {
+        if (publicHost) await call(POCKET_ENDPOINTS.deviceRevokeAll, { host: publicHost });
+      } else {
+        await call(POCKET_ENDPOINTS.deviceRevoke, { id: revokeTarget.id });
+      }
+      setRevokeTarget(null);
+      const list = publicHost ? await call(POCKET_ENDPOINTS.deviceList, { host: publicHost }) : [];
+      setDevices(list);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setRevokeBusy(false);
+    }
+  };
+
   const lanUrl = status?.lanUrl;
   const tunnelUrl = status?.tunnelUrl;
   const tunnelPhase = tunnelState?.phase ?? 'idle';
@@ -273,7 +412,7 @@ function PocketSettingsTab({ rpcCall, t }) {
       ),
       h('div', { style: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary,#8b93a1)', textAlign: 'right' } },
         h('div', { style: { whiteSpace: 'nowrap' } }, t('developer')),
-        h('div', { style: { whiteSpace: 'nowrap' } }, t('internalBuild')),
+        h('div', { style: { whiteSpace: 'nowrap' } }, fmt(t, 'internalBuild', { upstream: status?.upstreamLatest || 'v1.13.4' })),
       ),
     ),
 
@@ -318,53 +457,112 @@ function PocketSettingsTab({ rpcCall, t }) {
 
     // 局域网
     h('div', { style: styles.block },
-      h('div', { style: { fontWeight: 600, fontSize: 13 } }, t('lanTitle')),
-      lanUrl
-        ? h('div', null,
-          h('img', { src: status.lanQr, alt: 'LAN QR', style: styles.qr }),
-          h('div', { style: styles.code }, lanUrl),
-          h('div', { style: styles.muted }, t('lanHint')),
-          h('label', { style: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, fontSize: 12, color: 'var(--dsw-alias-label-secondary,#6b7280)' } },
-            t('lanAddress'),
-            h('select', {
-              value: status?.lanIpOverride || '',
-              onChange: (e) => setLanAddress(e.target.value),
-              style: { font: 'inherit', height: 30, padding: '0 8px', borderRadius: 8, border: '1px solid var(--dsw-alias-border-l2,#d1d5db)', background: 'var(--dsw-alias-bg-layer-1,#fff)', color: 'var(--dsw-alias-label-primary,inherit)' },
-            },
-            h('option', { value: '' }, t('lanAddressAuto')),
-            (status?.lanCandidates || []).map((ip) => h('option', { key: ip, value: ip }, ip)),
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, fontSize: 13 } },
+        t('lanTitle'),
+      ),
+      status?.lanEnabled !== false
+        ? (lanUrl
+          ? h('div', null,
+            h('img', { src: status.lanQr, alt: 'LAN QR', style: styles.qr }),
+            h('div', { style: styles.code }, lanUrl),
+            h('div', { style: styles.muted }, t('lanHint')),
+            h('label', { style: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, fontSize: 12, color: 'var(--dsw-alias-label-secondary,#6b7280)' } },
+              t('lanAddress'),
+              h('select', {
+                value: status?.lanIpOverride || '',
+                onChange: (e) => setLanAddress(e.target.value),
+                style: { font: 'inherit', height: 30, padding: '0 8px', borderRadius: 8, border: '1px solid var(--dsw-alias-border-l2,#d1d5db)', background: 'var(--dsw-alias-bg-layer-1,#fff)', color: 'var(--dsw-alias-label-primary,inherit)' },
+              },
+              h('option', { value: '' }, t('lanAddressAuto')),
+              (status?.lanCandidates || []).map((ip) => h('option', { key: ip, value: ip }, ip)),
+              ),
             ),
-          ),
-          h('div', { style: { ...styles.muted, marginTop: 2 } }, t('lanAddressHint')),
-          // 访问密码开关（issue #24）：默认开启；关闭后扫码直连（仅同一局域网设备可访问）
-          h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 } },
-            h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-secondary,#6b7280)' } }, t('lanPin')),
-            h('button', {
-              style: { ...styles.btn, height: 28, padding: '0 12px', fontSize: 12, fontWeight: status?.lanAuthEnabled !== false ? 600 : 400, background: status?.lanAuthEnabled !== false ? 'var(--dsw-alias-button-primary-fill, var(--dsw-alias-brand-primary,#4f6ef7))' : 'var(--dsw-alias-bg-layer-1,#fff)', color: status?.lanAuthEnabled !== false ? 'var(--dsw-alias-label-primary-foreground, #fff)' : 'var(--dsw-alias-label-primary,inherit)' },
-              onClick: () => setLanAuth(true),
-            }, t('on')),
-            h('button', {
-              style: { ...styles.btn, height: 28, padding: '0 12px', fontSize: 12, fontWeight: status?.lanAuthEnabled === false ? 600 : 400, background: status?.lanAuthEnabled === false ? 'var(--dsw-alias-state-error-primary,#dc2626)' : 'var(--dsw-alias-bg-layer-1,#fff)', color: status?.lanAuthEnabled === false ? '#fff' : 'var(--dsw-alias-label-primary,inherit)' },
-              onClick: () => setLanAuth(false),
-            }, t('off')),
-          ),
-          status?.lanAuthEnabled !== false
-            ? (customPin?.which === 'lan'
-                ? customPinRow('lan')
-                : h('div', { style: { marginTop: 6, fontSize: 12, color: 'var(--dsw-alias-label-secondary,#6b7280)', lineHeight: 1.5 } },
-                  fmt(t, status?.lanPinCustom ? 'lanPinCustomValue' : 'lanPinValue', { pin: status.lanToken }),
-                  h('button', { style: { ...styles.btn, height: 26, padding: '0 10px', fontSize: 12, marginLeft: 8 }, onClick: refreshLanPin }, t('refresh')),
-                  customBtn('lan'),
-                ))
-            : h('div', { style: { marginTop: 6, fontSize: 12, color: 'var(--dsw-alias-state-warn-primary,#b45309)', lineHeight: 1.5 } },
-              t('lanPinOff')),
-        )
-        : h('div', { style: styles.muted }, t('lanStarting')),
+            h('div', { style: { ...styles.muted, marginTop: 2 } }, t('lanAddressHint')),
+            // 访问密码开关（issue #24）：默认开启；关闭后扫码直连（仅同一局域网设备可访问）
+            h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 } },
+              h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-secondary,#6b7280)' } }, t('lanPin')),
+              h('button', {
+                style: { ...styles.btn, height: 28, padding: '0 12px', fontSize: 12, fontWeight: status?.lanAuthEnabled !== false ? 600 : 400, background: status?.lanAuthEnabled !== false ? 'var(--dsw-alias-button-primary-fill, var(--dsw-alias-brand-primary,#4f6ef7))' : 'var(--dsw-alias-bg-layer-1,#fff)', color: status?.lanAuthEnabled !== false ? 'var(--dsw-alias-label-primary-foreground, #fff)' : 'var(--dsw-alias-label-primary,inherit)' },
+                onClick: () => setLanAuth(true),
+              }, t('on')),
+              h('button', {
+                style: { ...styles.btn, height: 28, padding: '0 12px', fontSize: 12, fontWeight: status?.lanAuthEnabled === false ? 600 : 400, background: status?.lanAuthEnabled === false ? 'var(--dsw-alias-state-error-primary,#dc2626)' : 'var(--dsw-alias-bg-layer-1,#fff)', color: status?.lanAuthEnabled === false ? '#fff' : 'var(--dsw-alias-label-primary,inherit)' },
+                onClick: () => setLanAuth(false),
+              }, t('off')),
+            ),
+            status?.lanAuthEnabled !== false
+              ? (customPin?.which === 'lan'
+                  ? customPinRow('lan')
+                  : h('div', { style: { marginTop: 6, fontSize: 12, color: 'var(--dsw-alias-label-secondary,#6b7280)', lineHeight: 1.5 } },
+                    fmt(t, status?.lanPinCustom ? 'lanPinCustomValue' : 'lanPinValue', { pin: status.lanToken }),
+                    h('button', { style: { ...styles.btn, height: 26, padding: '0 10px', fontSize: 12, marginLeft: 8 }, onClick: refreshLanPin }, t('refresh')),
+                    customBtn('lan'),
+                  ))
+              : h('div', { style: { marginTop: 6, fontSize: 12, color: 'var(--dsw-alias-state-warn-primary,#b45309)', lineHeight: 1.5 } },
+                t('lanPinOff')),
+            h('div', { style: { marginTop: 10 } },
+              h('button', { style: { ...styles.btn, height: 28, padding: '0 12px', fontSize: 12 }, onClick: () => setLanAccess(false), disabled: lanBusy }, t('close')),
+            ),
+          )
+          : h('div', { style: styles.muted }, t('lanStarting')))
+        : h('div', { style: { marginTop: 4 } },
+          h('div', { style: styles.muted }, t('lanDisabled')),
+          h('button', { style: { ...styles.primary, marginTop: 8, height: 30, padding: '0 14px', fontSize: 12 }, onClick: () => setLanAccess(true), disabled: lanBusy }, t('lanEnable')),
+        ),
     ),
 
     // 公网
     h('div', { style: styles.block },
-      h('div', { style: { fontWeight: 600, fontSize: 13 } }, t('wanTitle')),
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, fontSize: 13 } },
+        t('wanTitle'),
+        status?.tunnelMode === 'fixed'
+          ? h('span', { style: { display: 'inline-block', marginLeft: 8, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: 'var(--dsw-alias-brand-primary,#4f6ef7)', color: '#fff' } }, t('fixedMode'))
+          : status?.tunnelMode === 'quick'
+            ? h('span', { style: { display: 'inline-block', marginLeft: 8, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: 'var(--dsw-alias-state-warn-primary,#b45309)', color: '#fff' } }, t('randomMode'))
+            : publicBase
+              ? h('span', { style: { display: 'inline-block', marginLeft: 8, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: 'var(--dsw-alias-brand-primary,#4f6ef7)', color: '#fff' } }, t('fixedMode'))
+              : null,
+      ),
+      
+      // 公网固定地址（named tunnel）：保存后公网二维码改用此地址，登录状态跨重启保持
+      h('div', { style: { marginTop: 8 } },
+        h('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--dsw-alias-label-secondary,#6b7280)' } }, t('publicBaseTitle')),
+        h('div', { style: { display: 'flex', gap: 8, marginTop: 6 } },
+          h('input', {
+            style: { flex: 1, font: 'inherit', height: 30, padding: '0 10px', fontSize: 12, borderRadius: 8, border: '1px solid var(--dsw-alias-border-l2,#d1d5db)', background: 'var(--dsw-alias-bg-layer-1,#fff)', color: 'var(--dsw-alias-label-primary,inherit)', outline: 'none' },
+            type: 'url',
+            placeholder: t('publicBasePlaceholder'),
+            value: baseValue,
+            onChange: (e) => setBaseInput(e.target.value),
+            onKeyDown: (e) => { if (e.key === 'Enter') savePublicBase(); },
+            spellCheck: false,
+          }),
+          h('button', { style: { ...styles.btn, height: 30, padding: '0 12px', fontSize: 12 }, onClick: savePublicBase, disabled: busy || !!baseError || (baseInput ?? '') === (publicBase ?? '') }, t('save')),
+          publicBase ? h('button', { style: { ...styles.btn, height: 30, padding: '0 12px', fontSize: 12 }, onClick: clearPublicBase, disabled: busy }, t('publicBaseClear')) : null,
+        ),
+        baseError ? h('div', { style: { color: 'var(--dsw-alias-state-error-primary,#dc2626)', fontSize: 12, marginTop: 4 } }, t(baseError)) : null,
+        h('div', { style: { ...styles.muted, marginTop: 4 } }, t('publicBaseHint')),
+      ),
+      publicBase ? h('div', { style: { marginTop: 8 } },
+        h('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--dsw-alias-label-secondary,#6b7280)' } }, t('cfModeTitle')),
+        h('div', { style: { display: 'flex', gap: 8, marginTop: 6 } },
+          h('button', { style: { ...styles.btn, height: 30, padding: '0 12px', fontSize: 12, fontWeight: cfMode === 'cli' ? 600 : 400, background: cfMode === 'cli' ? 'var(--dsw-alias-button-primary-fill, var(--dsw-alias-brand-primary,#4f6ef7))' : 'var(--dsw-alias-bg-layer-1,#fff)', color: cfMode === 'cli' ? 'var(--dsw-alias-label-primary-foreground, #fff)' : 'var(--dsw-alias-label-primary,inherit)' }, onClick: () => saveCfMode('cli'), disabled: cfBusy }, t('cfModeCli')),
+          h('button', { style: { ...styles.btn, height: 30, padding: '0 12px', fontSize: 12, fontWeight: cfMode === 'api' ? 600 : 400, background: cfMode === 'api' ? 'var(--dsw-alias-button-primary-fill, var(--dsw-alias-brand-primary,#4f6ef7))' : 'var(--dsw-alias-bg-layer-1,#fff)', color: cfMode === 'api' ? 'var(--dsw-alias-label-primary-foreground, #fff)' : 'var(--dsw-alias-label-primary,inherit)' }, onClick: () => saveCfMode('api'), disabled: cfBusy }, t('cfModeApi')),
+        ),
+        cfMode === 'cli'
+          ? h('div', { style: { ...styles.muted, marginTop: 4 } }, t('cfModeHintCli'))
+          : cfMode === 'api'
+            ? h('div', null,
+                h('div', { style: { ...styles.muted, marginTop: 4 } }, t('cfModeHintApi')),
+                h('div', { style: { display: 'flex', gap: 8, marginTop: 6 } },
+                  h('input', { style: { flex: 1, font: 'inherit', height: 30, padding: '0 10px', fontSize: 12, borderRadius: 8, border: '1px solid var(--dsw-alias-border-l2,#d1d5db)', background: 'var(--dsw-alias-bg-layer-1,#fff)', color: 'var(--dsw-alias-label-primary,inherit)', outline: 'none' }, type: 'password', placeholder: cfTokenSet ? t('cfTokenSaved') : t('cfTokenPlaceholder'), value: cfTokenInput, onChange: (e) => setCfTokenInput(e.target.value), spellCheck: false, autoComplete: 'off' }),
+                  h('button', { style: { ...styles.btn, height: 30, padding: '0 12px', fontSize: 12 }, onClick: saveCfToken, disabled: cfBusy || !((cfTokenInput ?? '').trim()) }, cfTokenSet ? t('cfTokenReplace') : t('cfTokenSave')),
+                  cfTokenSet ? h('button', { style: { ...styles.btn, height: 30, padding: '0 12px', fontSize: 12 }, onClick: clearCfToken, disabled: cfBusy }, t('cfTokenClear')) : null,
+                ),
+                cfTokenSet ? h('div', { style: { ...styles.muted, marginTop: 4 } }, t('cfTokenSavedHint')) : null,
+              )
+            : h('div', { style: { ...styles.muted, marginTop: 4 } }, t('cfModePickHint')),
+      ) : null,
       tunnelUrl
         ? h('div', null,
           h('img', { src: status.tunnelQr, alt: 'Tunnel QR', style: styles.qr }),
@@ -379,10 +577,24 @@ function PocketSettingsTab({ rpcCall, t }) {
                   status?.publicPinCustom ? h('div', { style: { marginTop: 2, fontSize: 11, color: 'var(--dsw-alias-state-warn-primary,#b45309)' } }, t('pinCustomHint')) : null,
                 ))
             : null,
-          h('button', { style: styles.btn, onClick: stopTunnel }, t('stopTunnel')),
+          h('div', { style: { display: 'flex', gap: 8, margin: '8px 0' } },
+            publicBase
+              ? [
+                  h('button', { style: status?.tunnelMode === 'fixed' ? styles.primary : styles.btn, onClick: status?.tunnelMode === 'fixed' ? stopTunnel : () => startTunnel(), disabled: busy || tunnelStarting }, status?.tunnelMode === 'fixed' ? t('close') : (busy ? t('opening') : t('enableFixed'))),
+                  h('button', { style: status?.tunnelMode === 'quick' ? styles.primary : styles.btn, onClick: status?.tunnelMode === 'quick' ? stopTunnel : () => startTunnel(true), disabled: busy || tunnelStarting }, status?.tunnelMode === 'quick' ? t('close') : (busy ? t('opening') : t('enableBackup'))),
+                ]
+              : h('button', { style: { ...(status?.tunnelMode === 'quick' ? styles.primary : styles.btn) }, onClick: status?.tunnelMode === 'quick' ? stopTunnel : () => startTunnel(), disabled: busy || tunnelStarting }, status?.tunnelMode === 'quick' ? t('close') : (busy ? t('opening') : t('enable'))),
+          ),
         )
         : h('div', null,
-          h('button', { style: { ...styles.primary, margin: '8px 0' }, onClick: startTunnel, disabled: busy || tunnelStarting }, busy ? t('opening') : t('enable')),
+          h('div', { style: { display: 'flex', gap: 8, margin: '8px 0' } },
+            publicBase
+              ? [
+                  h('button', { style: status?.tunnelMode === 'fixed' ? styles.primary : styles.btn, onClick: status?.tunnelMode === 'fixed' ? stopTunnel : () => startTunnel(), disabled: busy || tunnelStarting }, status?.tunnelMode === 'fixed' ? t('close') : (busy ? t('opening') : t('enableFixed'))),
+                  h('button', { style: status?.tunnelMode === 'quick' ? styles.primary : styles.btn, onClick: status?.tunnelMode === 'quick' ? stopTunnel : () => startTunnel(true), disabled: busy || tunnelStarting }, status?.tunnelMode === 'quick' ? t('close') : (busy ? t('opening') : t('enableBackup'))),
+                ]
+              : h('button', { style: { ...(status?.tunnelMode === 'quick' ? styles.primary : styles.btn) }, onClick: status?.tunnelMode === 'quick' ? stopTunnel : () => startTunnel(), disabled: busy || tunnelStarting }, status?.tunnelMode === 'quick' ? t('close') : (busy ? t('opening') : t('enable'))),
+          ),
           tunnelStarting
             ? h('div', { style: { marginTop: 4, fontSize: 12, color: 'var(--dsw-alias-label-secondary,#6b7280)' } },
               tunnelPhase === 'downloading'
@@ -393,6 +605,32 @@ function PocketSettingsTab({ rpcCall, t }) {
                 fmt(t, 'error', { detail: tunnelStateDetail || t('unknownError') }))
               : null,
         ),
+    ),
+    // 已配对设备（t14）：仅当前公网入口 Host；逐台/全部撤销
+    h('div', { style: styles.block },
+      h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 } },
+        h('div', { style: { fontWeight: 600, fontSize: 13 } }, t('devicesTitle')),
+        publicHost && devices?.length ? h('button', { style: { ...styles.btn, height: 28, padding: '0 12px', fontSize: 12 }, onClick: () => setRevokeTarget('all'), disabled: revokeBusy }, t('deviceRevokeAll')) : null,
+      ),
+      h('div', { style: { ...styles.muted, marginTop: 4 } }, t('devicesHint')),
+      devices === null
+        ? h('div', { style: { ...styles.muted, marginTop: 8 } }, t('devicesLoading'))
+        : devices.length === 0
+          ? h('div', { style: { ...styles.muted, marginTop: 8 } }, t('devicesEmpty'))
+          : h('div', { style: { marginTop: 8 } },
+              devices.map((d) => h('div', { key: d.id, style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '8px 0', borderBottom: '1px solid var(--dsw-alias-border-l2,#e5e7eb)' } },
+                h('div', null,
+                  h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 500 } },
+                    d.name,
+                    h('span', { style: { fontSize: 11, fontWeight: 400, color: 'var(--dsw-alias-label-tertiary,#8b93a1)' } }, `#${d.shortId || d.id.slice(0, 6)}`),
+                    h('span', { style: { width: 8, height: 8, borderRadius: 999, background: (d.online && status?.tunnelRunning) ? '#16a34a' : '#9ca3af', display: 'inline-block' } }),
+                    h('span', { style: { fontSize: 11, fontWeight: 400, color: (d.online && status?.tunnelRunning) ? '#16a34a' : 'var(--dsw-alias-label-tertiary,#8b93a1)' } }, (d.online && status?.tunnelRunning) ? t('deviceOnline') : t('deviceOffline')),
+                  ),
+                  h('div', { style: { ...styles.muted, marginTop: 2 } }, fmt(t, 'deviceMeta', { first: formatTime(d.createdAt), last: formatTime(d.lastSeenAt) })),
+                ),
+                h('button', { style: { ...styles.btn, height: 26, padding: '0 10px', fontSize: 12 }, onClick: () => setRevokeTarget(d), disabled: revokeBusy }, t('deviceRevoke')),
+              )),
+            ),
     ),
 
     error ? h('div', { style: { color: 'var(--dsw-alias-state-error-primary,#dc2626)', fontSize: 12, marginTop: 8 } }, `❌ ${error}`) : null,
@@ -415,6 +653,17 @@ function PocketSettingsTab({ rpcCall, t }) {
           }, t('disclaimerAgree')),
         ),
         !disclaimerChecked ? h('div', { style: { marginTop: 8, fontSize: 12, color: 'var(--dsw-alias-state-error-primary,#dc2626)' } }, t('disclaimerHint')) : null,
+      ),
+    ) : null,
+    // 撤销设备确认弹层（t14）：撤销后该设备下次访问需重新输入 PIN
+    revokeTarget ? h('div', { style: { position: 'fixed', inset: 0, zIndex: 10000, background: 'rgba(0,0,0,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 } },
+      h('div', { style: { background: 'var(--dsw-alias-bg-layer-1,#fff)', borderRadius: 12, maxWidth: 420, width: '100%', padding: '20px 22px', boxShadow: '0 8px 32px rgba(0,0,0,.18)' } },
+        h('div', { style: { fontWeight: 600, fontSize: 15, color: 'var(--dsw-alias-state-error-primary,#dc2626)', marginBottom: 10 } }, revokeTarget === 'all' ? t('deviceRevokeAllTitle') : t('deviceRevokeTitle')),
+        h('div', { style: { fontSize: 13, lineHeight: 1.7, color: 'var(--dsw-alias-label-primary,inherit)' } }, revokeTarget === 'all' ? t('deviceRevokeAllBody') : t('deviceRevokeBody')),
+        h('div', { style: { display: 'flex', gap: 8, marginTop: 16 } },
+          h('button', { style: { ...styles.btn, flex: 1 }, onClick: () => setRevokeTarget(null), disabled: revokeBusy }, t('cancel')),
+          h('button', { style: { ...styles.primary, flex: 1, background: 'var(--dsw-alias-state-error-primary,#dc2626)' }, onClick: confirmRevokeDevice, disabled: revokeBusy }, revokeBusy ? t('revoking') : (revokeTarget === 'all' ? t('deviceRevokeAll') : t('deviceRevoke'))),
+        ),
       ),
     ) : null,
 

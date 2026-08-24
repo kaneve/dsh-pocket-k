@@ -10,8 +10,18 @@ export const POCKET_ENDPOINTS = Object.freeze({
   restart: 'pocket.restart',
   lanTokenRefresh: 'token.lanRefresh',
   lanAuthSetEnabled: 'lanAuth.setEnabled',
+  lanSetEnabled: 'lan.setEnabled',
   lanSetOverride: 'lan.setOverride',
   pinSetCustom: 'pin.setCustom',
+  publicBaseGet: 'pocket.publicBase.get',
+  publicBaseSet: 'pocket.publicBase.set',
+  publicBaseClear: 'pocket.publicBase.clear',
+  cfModeSet: 'pocket.cf.mode.set',
+  cfTokenSet: 'pocket.cf.token.set',
+  cfTokenClear: 'pocket.cf.token.clear',
+  deviceList: 'device.list',
+  deviceRevoke: 'device.revoke',
+  deviceRevokeAll: 'device.revokeAll',
 });
 
 /** 语义化版本比较：a > b 返回正数，相等 0，a < b 负数（数字段 + 预发布后缀）。 */
@@ -53,6 +63,7 @@ export function redactStatus(s) {
   return {
     proxyRunning: s?.proxyRunning === true,
     proxyPort: s?.proxyPort ?? null,
+    lanEnabled: s?.lanEnabled !== false,
     lanUrl: s?.lanUrl ?? null,
     lanQr: s?.lanQr ?? null,
     lanCandidates: Array.isArray(s?.lanCandidates) ? s.lanCandidates : [],
@@ -61,6 +72,8 @@ export function redactStatus(s) {
     tunnelUrl: s?.tunnelUrl ?? null,
     tunnelQr: s?.tunnelQr ?? null,
     tunnelState: s?.tunnelState ?? { phase: 'idle' },
+    tunnelMode: s?.tunnelMode ?? null,
+    publicBase: s?.publicBase ?? null,
     dshPort: s?.dshPort ?? null,
   };
 }

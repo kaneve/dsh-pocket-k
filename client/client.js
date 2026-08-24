@@ -50,8 +50,18 @@ var POCKET_ENDPOINTS = Object.freeze({
   restart: "pocket.restart",
   lanTokenRefresh: "token.lanRefresh",
   lanAuthSetEnabled: "lanAuth.setEnabled",
+  lanSetEnabled: "lan.setEnabled",
   lanSetOverride: "lan.setOverride",
-  pinSetCustom: "pin.setCustom"
+  pinSetCustom: "pin.setCustom",
+  publicBaseGet: "pocket.publicBase.get",
+  publicBaseSet: "pocket.publicBase.set",
+  publicBaseClear: "pocket.publicBase.clear",
+  cfModeSet: "pocket.cf.mode.set",
+  cfTokenSet: "pocket.cf.token.set",
+  cfTokenClear: "pocket.cf.token.clear",
+  deviceList: "device.list",
+  deviceRevoke: "device.revoke",
+  deviceRevokeAll: "device.revokeAll"
 });
 function compareVersions(a, b) {
   const pa = String(a).replace(/^[vV]/, "").split(".");
@@ -86,6 +96,7 @@ function redactStatus(s) {
   return {
     proxyRunning: s?.proxyRunning === true,
     proxyPort: s?.proxyPort ?? null,
+    lanEnabled: s?.lanEnabled !== false,
     lanUrl: s?.lanUrl ?? null,
     lanQr: s?.lanQr ?? null,
     lanCandidates: Array.isArray(s?.lanCandidates) ? s.lanCandidates : [],
@@ -94,6 +105,8 @@ function redactStatus(s) {
     tunnelUrl: s?.tunnelUrl ?? null,
     tunnelQr: s?.tunnelQr ?? null,
     tunnelState: s?.tunnelState ?? { phase: "idle" },
+    tunnelMode: s?.tunnelMode ?? null,
+    publicBase: s?.publicBase ?? null,
     dshPort: s?.dshPort ?? null
   };
 }
@@ -322,6 +335,89 @@ function createSheetRiseTask() {
 }
 
 // client/mobile/effects/stats-line.ts
+var SEP_SPLIT = /\s*[·．]\s*|(?<![0-9])\.(?![0-9])|(?<!\d)\.(?=\d)/;
+var TTFT_ZH = /^首\s*token\s*平均/;
+var TTFT_EN = /^TTFT\s+avg/i;
+function compactGroup(text, lang) {
+  const trimmed = text.trim();
+  if (trimmed === "") return "";
+  const parts = trimmed.split(SEP_SPLIT).map((part) => part.trim()).filter(Boolean);
+  const zh3 = lang === "zh";
+  if (zh3 ? /[轮步]/.test(trimmed) : /\b(turns|steps)\b/i.test(trimmed)) {
+    if (zh3) return parts.map((part) => part.replace(/\s+/g, "")).join("");
+    return parts.join(" ");
+  }
+  if (zh3 ? /(LLM|工具调用)/.test(trimmed) : /(LLM|Tool call)/i.test(trimmed)) {
+    const mapped = parts.map((part) => {
+      let out = part;
+      if (zh3) out = out.replace(/LLM/, "\u6A21\u578B").replace(/工具调用\s*/, "\u5DE5\u5177");
+      else out = out.replace(/Tool call/i, "Tool");
+      return out.trim();
+    }).filter(Boolean);
+    return mapped.join(" ");
+  }
+  if (zh3 ? /(首\s*token|tok\/s)/.test(trimmed) : /(TTFT|tok\/s)/i.test(trimmed)) {
+    const mapped = parts.filter((part) => !(zh3 ? TTFT_ZH : TTFT_EN).test(part)).map((part) => part.replace(/tok\/s/g, "t/s").trim()).filter(Boolean);
+    return mapped.join(" \xB7 ");
+  }
+  if (zh3 ? /缓存命中/.test(trimmed) : /Cache hit/i.test(trimmed)) {
+    let out = trimmed;
+    if (zh3) out = out.replace(/缓存命中/, "\u7F13\u4E2D");
+    else out = out.replace(/Cache hit/i, "Cache");
+    return out.trim();
+  }
+  if (zh3 ? /(输入|输出|tok)/.test(trimmed) : /(Input|Output|tok)/i.test(trimmed)) {
+    const mapped = parts.map((part) => {
+      let out = part;
+      if (zh3) out = out.replace(/输入\s*/, "\u5165 ").replace(/输出\s*/, "\u51FA");
+      else out = out.replace(/Input/i, "In").replace(/Output/i, "Out");
+      out = out.replace(/\btok\b/g, "t");
+      return out.trim();
+    }).filter(Boolean);
+    return mapped.join(zh3 ? " . " : " \xB7 ");
+  }
+  return trimmed;
+}
+function isStatsGroup(el) {
+  return el.nodeType === 1 && el.tagName === "SPAN" && el.getAttribute("aria-hidden") !== "true";
+}
+function removeStatsGroup(group) {
+  const prev = group.previousSibling;
+  if (prev !== null && prev.nodeType === 3 && /^\s*$/.test(prev.textContent ?? "") && prev.previousSibling !== null && prev.previousSibling.nodeType === 1 && prev.previousSibling.getAttribute("aria-hidden") === "true") {
+    prev.previousSibling.remove();
+    prev.remove();
+    group.remove();
+    return;
+  }
+  const next = group.nextSibling;
+  if (next !== null && next.nodeType === 3 && /^\s*$/.test(next.textContent ?? "") && next.nextSibling !== null && next.nextSibling.nodeType === 1 && next.nextSibling.getAttribute("aria-hidden") === "true") {
+    next.nextSibling.remove();
+    next.remove();
+    group.remove();
+    return;
+  }
+  group.remove();
+}
+function compactStats(stats) {
+  const lang = /[\u4e00-\u9fff]/.test(stats.textContent ?? "") ? "zh" : "en";
+  for (const group of Array.from(stats.children).filter(isStatsGroup)) {
+    const original = group.textContent ?? "";
+    if (original.trim() === "") continue;
+    const compacted = compactGroup(original, lang);
+    if (compacted === "") {
+      removeStatsGroup(group);
+    } else if (compacted !== original) {
+      group.textContent = compacted;
+    }
+  }
+  for (const el of Array.from(stats.children)) {
+    if (el.children.length === 0 && /^TPS\s+\d/.test((el.textContent ?? "").trim())) {
+      const text = el.textContent ?? "";
+      const compacted = text.replace(/tok\/s/g, "t/s");
+      if (compacted !== text) el.textContent = compacted;
+    }
+  }
+}
 function createStatsLineTask() {
   let tpsOrigin = null;
   const moveTps = (stats) => {
@@ -349,6 +445,7 @@ function createStatsLineTask() {
       if (root.querySelector("textarea") !== null) continue;
       root.setAttribute("data-mobile-nav", "stats");
       moveTps(root);
+      compactStats(root);
       return;
     }
   };
@@ -1987,9 +2084,9 @@ var COMPAT_CSS = `@media (max-width: 1023px) {
      The official session-status row (turns / steps / LLM time / TTFT /
      cache) is long. The client marks the exact row with
      [data-mobile-nav="stats"] (text-anchored, hashed classes can't be
-     targeted). Layout: ONE fixed-height (28px) flex strip that scrolls
+     targeted). Layout: ONE fixed-height (26px) flex strip that scrolls
      horizontally \u2014 the full metrics stream stays reachable by swiping,
-     the row never grows vertically, no ellipsis or fade, 12px gaps
+     the row never grows vertically, no ellipsis or fade, 8px gaps
      between metric groups, a 2px scrollbar as the swipe affordance. */
 
   [data-mobile-nav="stats"] {
@@ -1999,9 +2096,9 @@ var COMPAT_CSS = `@media (max-width: 1023px) {
     width: 100% !important;
     max-width: 100% !important;
     min-width: 0 !important;
-    height: 28px !important;
-    min-height: 28px !important;
-    max-height: 28px !important;
+    height: 26px !important;
+    min-height: 26px !important;
+    max-height: 26px !important;
     box-sizing: border-box !important;
     white-space: nowrap !important;
     overflow-x: auto !important;
@@ -2010,9 +2107,9 @@ var COMPAT_CSS = `@media (max-width: 1023px) {
     overscroll-behavior-x: contain;
     scrollbar-width: thin !important;
     scrollbar-color: var(--dsw-alias-border-l1, rgba(0, 0, 0, .28)) transparent !important;
-    padding: 0 0 4px !important;
-    line-height: 20px !important;
-    font-size: 12px !important;
+    padding: 0 0 2px !important;
+    line-height: 18px !important;
+    font-size: 11px !important;
   }
   [data-mobile-nav="stats"]::-webkit-scrollbar {
     height: 2px !important;
@@ -2033,7 +2130,7 @@ var COMPAT_CSS = `@media (max-width: 1023px) {
     min-width: max-content !important;
     max-width: none !important;
     white-space: nowrap !important;
-    margin-right: 12px !important;
+    margin-right: 8px !important;
     padding: 0 !important;
   }
   [data-mobile-nav="stats"] > *:last-child {
@@ -2569,7 +2666,7 @@ var zh2 = {
   "title": "\u{1F4F1} \u624B\u673A\u8BBF\u95EE",
   "subtitle": "\u624B\u673A\u626B\u7801\u6253\u5F00\u7684\u5C31\u662F\u7535\u8111\u4E0A\u7684\u8FD9\u4E2A\u754C\u9762\uFF0C\u5B9E\u65F6\u540C\u6B65",
   "developer": "\u5F00\u53D1\u8005\uFF1A\u7A0B\u5E8F\u5458\u5C11\u5317\u6668 \xB7 kaneve",
-  "internalBuild": "\u5185\u90E8\u7248\u672C v1.13.4-k1\uFF08\u4E0A\u6E38 v1.13.4\uFF09",
+  "internalBuild": "\u5185\u90E8\u7248\u672C v1.13.4-k1\uFF08\u4E0A\u6E38 {upstream}\uFF09",
   "restarted": "\u{1F504} \u5DF2\u91CD\u542F",
   "ok": "\u77E5\u9053\u4E86",
   "bgHint": "\u8FDB\u7A0B\u5728\u540E\u53F0\u8FD0\u884C\uFF08\u4E0D\u6302\u7EC8\u7AEF\uFF09\u3002\u5982\u9700\u505C\u6B62\uFF1A{cmd}",
@@ -2606,11 +2703,53 @@ var zh2 = {
   "pinInvalid": "\u5BC6\u7801\u5FC5\u987B\u662F 8 \u4F4D\u6570\u5B57",
   "pinCustomHint": "\u81EA\u5B9A\u4E49\u540E\u5F00\u542F\u516C\u7F51\u4E0D\u518D\u81EA\u52A8\u6362\u65B0",
   "lanPinOff": "\u{1F513} \u5BC6\u7801\u5DF2\u5173\u95ED\uFF1A\u626B\u7801\u76F4\u8FDE\uFF0C\u65E0\u9700\u5BC6\u7801\uFF08\u4EC5\u540C\u4E00\u5C40\u57DF\u7F51\u8BBE\u5907\u53EF\u8BBF\u95EE\uFF1B\u516C\u7F51\u4ECD\u8981\u5BC6\u7801\uFF09",
+  "lanDisabled": "\u5C40\u57DF\u7F51\u8BBF\u95EE\u5DF2\u5173\u95ED\uFF1A\u624B\u673A\u65E0\u6CD5\u901A\u8FC7\u5C40\u57DF\u7F51\u8BBF\u95EE\uFF08\u516C\u7F51\u96A7\u9053\u4E0D\u53D7\u5F71\u54CD\uFF09",
+  "lanEnable": "\u5F00\u542F\u5C40\u57DF\u7F51",
   "lanStarting": "\u4EE3\u7406\u672A\u5C31\u7EEA\u2026",
   "wanTitle": "\u{1F310} \u516C\u7F51\uFF08\u4EBA\u5728\u5916\u9762\uFF09",
   "wanHint": "\u4EFB\u4F55\u7F51\u7EDC\u626B\u7801\u5373\u7528\uFF08URL \u6BCF\u6B21\u91CD\u542F\u81EA\u52A8\u6362\u65B0\uFF09",
   "wanPin": "\u{1F510} \u8BBF\u95EE\u5BC6\u7801\uFF1A{pin}\uFF08\u6BCF\u6B21\u5F00\u542F\u516C\u7F51\u53D8\u65B0\uFF1B\u624B\u673A\u6253\u5F00\u94FE\u63A5\u9700\u8F93\u5165\u6B64\u5BC6\u7801\uFF09",
   "wanPinCustom": "\u{1F510} \u8BBF\u95EE\u5BC6\u7801\uFF1A{pin}\uFF08\u81EA\u5B9A\u4E49\uFF0C\u5F00\u542F\u516C\u7F51\u4E0D\u518D\u81EA\u52A8\u6362\u65B0\uFF09",
+  "fixedMode": "\u56FA\u5B9A\u57DF\u540D\u6A21\u5F0F\uFF08\u624B\u52A8 named tunnel\uFF09",
+  "randomMode": "\u968F\u673A\u96A7\u9053\u6A21\u5F0F\uFF08\u6BCF\u6B21\u91CD\u542F\u6362\u65B0\u5730\u5740\uFF09",
+  "publicBaseTitle": "\u516C\u7F51\u56FA\u5B9A\u5730\u5740",
+  "publicBasePlaceholder": "https://dsh.example.com",
+  "publicBaseClear": "\u6E05\u9664",
+  "publicBaseHint": "\u5728 Cloudflare \u63A7\u5236\u53F0\u521B\u5EFA named tunnel \u5E76\u6307\u5411\u672C\u673A 3081 \u7AEF\u53E3\uFF1B\u57DF\u540D\u9700\u6258\u7BA1\u5728 Cloudflare\uFF1B\u5927\u9646\u53EF\u8FBE\u6027\u8BF7\u81EA\u6D4B\u3002\u4FDD\u5B58\u540E\u516C\u7F51\u4E8C\u7EF4\u7801\u6539\u7528\u6B64\u5730\u5740\uFF0C\u767B\u5F55\u72B6\u6001\u8DE8\u91CD\u542F\u4FDD\u6301\u3002",
+  "cfModeTitle": "Cloudflare \u81EA\u52A8\u914D\u7F6E\u65B9\u5F0F",
+  "cfModeCli": "CLI \u767B\u5F55\uFF08cloudflared tunnel login\uFF09",
+  "cfModeApi": "API Token\uFF08\u65E0\u9700\u547D\u4EE4\u884C\uFF09",
+  "cfModePickHint": "\u8BF7\u9009\u62E9\u4E00\u79CD\u81EA\u52A8\u914D\u7F6E\u65B9\u5F0F\uFF1ACLI \u767B\u5F55\u6216 API Token\u3002",
+  "cfModeHintCli": "\u5148\u5728\u7EC8\u7AEF\u8FD0\u884C `cloudflared tunnel login` \u751F\u6210\u8BC1\u4E66\uFF0C\u4FDD\u5B58\u56FA\u5B9A\u57DF\u540D\u540E\u70B9\u300C\u5F00\u542F\u56FA\u5B9A\u57DF\u540D\u516C\u7F51\u300D\uFF0C\u63D2\u4EF6\u4F1A\u81EA\u52A8\u521B\u5EFA named tunnel\u3001\u914D\u7F6E DNS \u5E76\u542F\u52A8\u3002",
+  "cfModeHintApi": "\u7C98\u8D34 Cloudflare API Token\uFF08\u9700 Account > Cloudflare Tunnel > Edit \u548C Zone > DNS > Edit \u6743\u9650\uFF09\u3002\u63D2\u4EF6\u4F1A\u81EA\u52A8\u521B\u5EFA\u96A7\u9053\u3001\u914D\u7F6E DNS \u5E76\u542F\u52A8\uFF0C\u65E0\u9700\u547D\u4EE4\u884C\u3002",
+  "cfTokenPlaceholder": "\u7C98\u8D34 Cloudflare API Token",
+  "cfTokenSaved": "\u5DF2\u4FDD\u5B58 Token\uFF08\u4E0D\u56DE\u663E\uFF09",
+  "cfTokenSave": "\u4FDD\u5B58 Token",
+  "cfTokenReplace": "\u66FF\u6362 Token",
+  "cfTokenClear": "\u6E05\u9664",
+  "cfTokenSavedHint": "Token \u5DF2\u4FDD\u5B58\uFF0C\u4EC5\u5B58\u672C\u673A settings.json\uFF080600\uFF09\uFF0C\u4E0D\u4F1A\u56DE\u663E\u5230\u9875\u9762\u3002",
+  "enableFixed": "\u5F00\u542F\u56FA\u5B9A\u57DF\u540D\u516C\u7F51",
+  "close": "\u5173\u95ED",
+  "publicBaseErrMissing": "\u8BF7\u8F93\u5165 https:// \u5730\u5740",
+  "publicBaseErrUrl": "\u4E0D\u662F\u5408\u6CD5\u7684 URL",
+  "publicBaseErrProtocol": "\u4EC5\u652F\u6301 https://",
+  "publicBaseErrPath": "\u4E0D\u80FD\u5305\u542B\u8DEF\u5F84\u3001\u7ED3\u5C3E\u659C\u6760\u3001query \u6216 hash",
+  "publicBaseErrAuth": "\u4E0D\u80FD\u5305\u542B\u7528\u6237\u540D\u6216\u5BC6\u7801",
+  "devicesTitle": "\u5DF2\u914D\u5BF9\u8BBE\u5907",
+  "devicesHint": "\u5DF2\u767B\u5F55\u8FC7\u516C\u7F51\u5730\u5740\u7684\u624B\u673A/\u6D4F\u89C8\u5668\uFF1B\u6BCF\u53F0\u8BBE\u5907\u6301\u6709\u72EC\u7ACB\u4F1A\u8BDD\u3002\u64A4\u9500\u540E\u8BE5\u8BBE\u5907\u4E0B\u6B21\u8BBF\u95EE\u9700\u91CD\u65B0\u8F93\u5165 PIN\u3002",
+  "devicesLoading": "\u6B63\u5728\u52A0\u8F7D\u8BBE\u5907\u2026",
+  "devicesEmpty": "\u8FD8\u6CA1\u6709\u8BBE\u5907\u767B\u5F55\u8FC7\u516C\u7F51\u5730\u5740",
+  "deviceOnline": "\u5728\u7EBF",
+  "deviceOffline": "\u79BB\u7EBF",
+  "deviceMeta": "\u9996\u6B21\u767B\u5F55\uFF1A{first} \xB7 \u6700\u8FD1\u6D3B\u52A8\uFF1A{last}",
+  "deviceRevoke": "\u64A4\u9500",
+  "deviceRevokeAll": "\u5168\u90E8\u64A4\u9500",
+  "deviceRevokeTitle": "\u64A4\u9500\u8FD9\u53F0\u8BBE\u5907\uFF1F",
+  "deviceRevokeAllTitle": "\u64A4\u9500\u5168\u90E8\u8BBE\u5907\uFF1F",
+  "deviceRevokeBody": "\u64A4\u9500\u540E\uFF0C\u8BE5\u8BBE\u5907\u4E0B\u6B21\u8BBF\u95EE\u516C\u7F51\u5730\u5740\u9700\u8981\u91CD\u65B0\u8F93\u5165 PIN\u3002",
+  "deviceRevokeAllBody": "\u64A4\u9500\u540E\uFF0C\u6240\u6709\u5DF2\u914D\u5BF9\u8BBE\u5907\u4E0B\u6B21\u8BBF\u95EE\u516C\u7F51\u5730\u5740\u90FD\u9700\u8981\u91CD\u65B0\u8F93\u5165 PIN\u3002",
+  "revoking": "\u64A4\u9500\u4E2D\u2026",
+  "enableBackup": "\u5F00\u542F\u5FEB\u901F\u96A7\u9053\uFF08\u5907\u7528\uFF09",
   "stopTunnel": "\u5173\u95ED\u516C\u7F51",
   "enable": "\u5F00\u542F\u516C\u7F51\u8BBF\u95EE",
   "opening": "\u5F00\u542F\u4E2D\u2026",
@@ -2630,7 +2769,7 @@ var en2 = {
   "title": "\u{1F4F1} Phone access",
   "subtitle": "The phone shows this exact screen, live",
   "developer": "Developer: \u5C11\u5317\u6668 (shaobeichen) \xB7 kaneve",
-  "internalBuild": "Internal build v1.13.4-k1 (upstream v1.13.4)",
+  "internalBuild": "Internal build v1.13.4-k1 (upstream {upstream})",
   "restarted": "\u{1F504} Restarted",
   "ok": "Got it",
   "bgHint": "Running in the background (not attached to a terminal). To stop: {cmd}",
@@ -2667,11 +2806,53 @@ var en2 = {
   "pinInvalid": "PIN must be exactly 8 digits",
   "pinCustomHint": "custom PINs are not rotated on tunnel start",
   "lanPinOff": "\u{1F513} PIN off \u2014 scan & go, no PIN (LAN devices only; public still requires PIN)",
+  "lanDisabled": "LAN access is off: phones cannot reach this computer over LAN (public tunnel is unaffected)",
+  "lanEnable": "Enable LAN",
   "lanStarting": "Proxy starting\u2026",
   "wanTitle": "\u{1F310} Anywhere (public)",
   "wanHint": "Scan from any network (the URL changes on every restart)",
   "wanPin": "\u{1F510} PIN: {pin} (changes each time the tunnel is enabled; required on the phone)",
   "wanPinCustom": "\u{1F510} PIN: {pin} (custom \u2014 not rotated on tunnel start)",
+  "fixedMode": "Fixed-domain mode (manual named tunnel)",
+  "randomMode": "Random tunnel mode (new address on every restart)",
+  "publicBaseTitle": "Public fixed address",
+  "publicBasePlaceholder": "https://dsh.example.com",
+  "publicBaseClear": "Remove",
+  "publicBaseHint": "Create a named tunnel in the Cloudflare dashboard pointing at local port 3081; the domain must be hosted on Cloudflare (reachability from mainland China may vary). Once saved, the public QR code uses this address and your login survives restarts.",
+  "cfModeTitle": "Cloudflare auto-setup",
+  "cfModeCli": "CLI login (cloudflared tunnel login)",
+  "cfModeApi": "API Token (no CLI needed)",
+  "cfModePickHint": "Choose an auto-setup method: CLI login or API Token.",
+  "cfModeHintCli": 'Run `cloudflared tunnel login` in a terminal first. After saving the fixed domain, click "Enable fixed-domain" and the plugin will create the named tunnel, set up DNS, and start it.',
+  "cfModeHintApi": "Paste a Cloudflare API Token (permissions: Account > Cloudflare Tunnel > Edit and Zone > DNS > Edit). The plugin creates the tunnel, configures DNS, and starts it \u2014 no CLI needed.",
+  "cfTokenPlaceholder": "Paste Cloudflare API Token",
+  "cfTokenSaved": "Token saved (not shown again)",
+  "cfTokenSave": "Save Token",
+  "cfTokenReplace": "Replace Token",
+  "cfTokenClear": "Clear",
+  "cfTokenSavedHint": "Token is stored only in local settings.json (0600) and is never echoed on this page.",
+  "enableFixed": "Enable fixed-domain",
+  "close": "Close",
+  "publicBaseErrMissing": "Enter an https:// address",
+  "publicBaseErrUrl": "Not a valid URL",
+  "publicBaseErrProtocol": "Only https:// is supported",
+  "publicBaseErrPath": "No path, trailing slash, query, or hash allowed",
+  "publicBaseErrAuth": "Username/password are not allowed",
+  "devicesTitle": "Paired devices",
+  "devicesHint": "Phones/browsers that have signed in to the public address; each device has an independent session. Revoking one makes it re-enter the PIN on its next visit.",
+  "devicesLoading": "Loading devices\u2026",
+  "devicesEmpty": "No devices have signed in to the public address yet",
+  "deviceOnline": "Online",
+  "deviceOffline": "Offline",
+  "deviceMeta": "First seen: {first} \xB7 Last activity: {last}",
+  "deviceRevoke": "Revoke",
+  "deviceRevokeAll": "Revoke all",
+  "deviceRevokeTitle": "Revoke this device?",
+  "deviceRevokeAllTitle": "Revoke all devices?",
+  "deviceRevokeBody": "After revoking, this device must enter the PIN again on its next visit to the public address.",
+  "deviceRevokeAllBody": "After revoking, every paired device must enter the PIN again on its next visit to the public address.",
+  "revoking": "Revoking\u2026",
+  "enableBackup": "Start quick tunnel (backup)",
   "stopTunnel": "Stop",
   "enable": "Enable anywhere",
   "opening": "Enabling\u2026",
@@ -2699,6 +2880,35 @@ function fmt(t, key, vars) {
   }
   return s;
 }
+function publicBaseError(raw) {
+  const s = String(raw ?? "").trim();
+  if (!s) return null;
+  try {
+    const u = new URL(s);
+    if (u.protocol !== "https:") return "publicBaseErrProtocol";
+    if (u.pathname !== "/" || /\/$/.test(s) || u.search || u.hash) return "publicBaseErrPath";
+    if (u.username || u.password) return "publicBaseErrAuth";
+    return null;
+  } catch {
+    return "publicBaseErrUrl";
+  }
+}
+function publicHostOf(status) {
+  const raw = status?.activeTunnelUrl || status?.publicBase || status?.tunnelUrl || null;
+  if (!raw) return null;
+  try {
+    return new URL(raw).host;
+  } catch {
+    return null;
+  }
+}
+function formatTime(ts) {
+  try {
+    return new Date(ts).toLocaleString();
+  } catch {
+    return String(ts ?? "");
+  }
+}
 var styles = {
   card: { background: "var(--dsw-alias-bg-layer-1,#fff)", border: "1px solid var(--dsw-alias-border-l2,#e5e7eb)", borderRadius: 12, padding: "16px 20px", maxWidth: 480 },
   block: { borderTop: "1px solid var(--dsw-alias-border-l2,#e5e7eb)", marginTop: 16, paddingTop: 16 },
@@ -2714,12 +2924,17 @@ var styles = {
 function PocketSettingsTab({ rpcCall, t }) {
   const [status, setStatus] = (0, import_react.useState)(null);
   const [busy, setBusy] = (0, import_react.useState)(false);
+  const [lanBusy, setLanBusy] = (0, import_react.useState)(false);
   const [error, setError] = (0, import_react.useState)(null);
   const [tunnelState, setTunnelState] = (0, import_react.useState)(null);
   const [restartNotice, setRestartNotice] = (0, import_react.useState)(false);
   const [updateInfo, setUpdateInfo] = (0, import_react.useState)(null);
   const [isDesktop, setIsDesktop] = (0, import_react.useState)(false);
   const [now, setNow] = (0, import_react.useState)(Date.now());
+  const [devices, setDevices] = (0, import_react.useState)(null);
+  const [deviceHost, setDeviceHost] = (0, import_react.useState)(null);
+  const [revokeTarget, setRevokeTarget] = (0, import_react.useState)(null);
+  const [revokeBusy, setRevokeBusy] = (0, import_react.useState)(false);
   (0, import_react.useEffect)(() => {
     const t2 = setInterval(() => setNow(Date.now()), 1e3);
     return () => clearInterval(t2);
@@ -2821,26 +3036,28 @@ function PocketSettingsTab({ rpcCall, t }) {
   };
   const [disclaimerOpen, setDisclaimerOpen] = (0, import_react.useState)(false);
   const [disclaimerChecked, setDisclaimerChecked] = (0, import_react.useState)(false);
-  const doStartTunnel = async () => {
+  const doStartTunnel = async (quick = false) => {
     setBusy(true);
     setError(null);
     setTunnelState({ phase: "starting", detail: "\u6B63\u5728\u5F00\u542F\u2026", startedAt: Date.now() });
     try {
-      setStatus(await call(POCKET_ENDPOINTS.tunnelStart, { disclaimer: true }));
+      setStatus(await call(POCKET_ENDPOINTS.tunnelStart, { disclaimer: true, ...quick ? { quick: true } : {} }));
     } catch (err) {
       setError(err.message);
     } finally {
       setBusy(false);
     }
   };
-  const startTunnel = () => {
+  const [startMode, setStartMode] = (0, import_react.useState)("fixed");
+  const startTunnel = (quick = false) => {
+    setStartMode(quick ? "quick" : "fixed");
     setDisclaimerChecked(false);
     setDisclaimerOpen(true);
   };
   const confirmDisclaimer = () => {
     if (!disclaimerChecked) return;
     setDisclaimerOpen(false);
-    doStartTunnel();
+    doStartTunnel(startMode === "quick");
   };
   const stopTunnel = async () => {
     try {
@@ -2860,6 +3077,16 @@ function PocketSettingsTab({ rpcCall, t }) {
       const r = await call(POCKET_ENDPOINTS.lanAuthSetEnabled, { on });
       setStatus((s) => ({ ...s, lanAuthEnabled: r.lanAuthEnabled }));
     } catch {
+    }
+  };
+  const setLanAccess = async (on) => {
+    setLanBusy(true);
+    try {
+      setStatus(await call(POCKET_ENDPOINTS.lanSetEnabled, { on }));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLanBusy(false);
     }
   };
   const setLanAddress = async (ip) => {
@@ -2907,6 +3134,118 @@ function PocketSettingsTab({ rpcCall, t }) {
     customPin?.err ? (0, import_react.createElement)("div", { style: { color: "var(--dsw-alias-state-error-primary,#dc2626)", marginTop: 4 } }, customPin.err) : null
   );
   const customBtn = (which) => (0, import_react.createElement)("button", { style: { ...styles.btn, height: 26, padding: "0 10px", fontSize: 12, marginLeft: 8 }, onClick: () => setCustomPin({ which, value: "", err: null }) }, t("customize"));
+  const [baseInput, setBaseInput] = (0, import_react.useState)(null);
+  const publicBase = status?.publicBase ?? null;
+  (0, import_react.useEffect)(() => {
+    setBaseInput(null);
+  }, [publicBase]);
+  const savePublicBase = async () => {
+    if (baseError) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setStatus(await call(POCKET_ENDPOINTS.publicBaseSet, { url: (baseInput ?? "").trim() }));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const clearPublicBase = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      setStatus(await call(POCKET_ENDPOINTS.publicBaseClear, {}));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const cfMode = status?.cfMode ?? null;
+  const cfTokenSet = !!status?.cfTokenSet;
+  const [cfTokenInput, setCfTokenInput] = (0, import_react.useState)("");
+  const [cfBusy, setCfBusy] = (0, import_react.useState)(false);
+  const saveCfMode = async (mode) => {
+    setCfBusy(true);
+    setError(null);
+    try {
+      setStatus(await call(POCKET_ENDPOINTS.cfModeSet, { mode }));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setCfBusy(false);
+    }
+  };
+  const saveCfToken = async () => {
+    const token = (cfTokenInput ?? "").trim();
+    if (!token) return;
+    setCfBusy(true);
+    setError(null);
+    try {
+      setStatus(await call(POCKET_ENDPOINTS.cfTokenSet, { token }));
+      setCfTokenInput("");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setCfBusy(false);
+    }
+  };
+  const clearCfToken = async () => {
+    setCfBusy(true);
+    setError(null);
+    try {
+      setStatus(await call(POCKET_ENDPOINTS.cfTokenClear, {}));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setCfBusy(false);
+    }
+  };
+  const publicHost = publicHostOf(status);
+  const baseValue = baseInput ?? publicBase ?? "";
+  const baseError = baseInput !== null ? publicBaseError(baseValue) : null;
+  (0, import_react.useEffect)(() => {
+    let alive = true;
+    const fetchDevices = async () => {
+      setDeviceHost(publicHost);
+      if (!publicHost) {
+        if (alive) setDevices([]);
+        return;
+      }
+      try {
+        const list = await call(POCKET_ENDPOINTS.deviceList, { host: publicHost });
+        if (alive) setDevices(list);
+      } catch {
+        if (alive) setDevices([]);
+      }
+    };
+    fetchDevices();
+    const timer = setInterval(fetchDevices, 3e3);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [publicHost]);
+  const confirmRevokeDevice = async () => {
+    if (!revokeTarget) return;
+    setRevokeBusy(true);
+    setError(null);
+    try {
+      if (revokeTarget === "all") {
+        if (publicHost) await call(POCKET_ENDPOINTS.deviceRevokeAll, { host: publicHost });
+      } else {
+        await call(POCKET_ENDPOINTS.deviceRevoke, { id: revokeTarget.id });
+      }
+      setRevokeTarget(null);
+      const list = publicHost ? await call(POCKET_ENDPOINTS.deviceList, { host: publicHost }) : [];
+      setDevices(list);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setRevokeBusy(false);
+    }
+  };
   const lanUrl = status?.lanUrl;
   const tunnelUrl = status?.tunnelUrl;
   const tunnelPhase = tunnelState?.phase ?? "idle";
@@ -2929,7 +3268,7 @@ function PocketSettingsTab({ rpcCall, t }) {
         "div",
         { style: { fontSize: 12, color: "var(--dsw-alias-label-tertiary,#8b93a1)", textAlign: "right" } },
         (0, import_react.createElement)("div", { style: { whiteSpace: "nowrap" } }, t("developer")),
-        (0, import_react.createElement)("div", { style: { whiteSpace: "nowrap" } }, t("internalBuild"))
+        (0, import_react.createElement)("div", { style: { whiteSpace: "nowrap" } }, fmt(t, "internalBuild", { upstream: status?.upstreamLatest || "v1.13.4" }))
       )
     ),
     // 桌面端不显示更新/重启横幅（更新由 DSH Desktop 管理），也不需要额外提示
@@ -2970,8 +3309,12 @@ function PocketSettingsTab({ rpcCall, t }) {
     (0, import_react.createElement)(
       "div",
       { style: styles.block },
-      (0, import_react.createElement)("div", { style: { fontWeight: 600, fontSize: 13 } }, t("lanTitle")),
-      lanUrl ? (0, import_react.createElement)(
+      (0, import_react.createElement)(
+        "div",
+        { style: { display: "flex", alignItems: "center", gap: 8, fontWeight: 600, fontSize: 13 } },
+        t("lanTitle")
+      ),
+      status?.lanEnabled !== false ? lanUrl ? (0, import_react.createElement)(
         "div",
         null,
         (0, import_react.createElement)("img", { src: status.lanQr, alt: "LAN QR", style: styles.qr }),
@@ -3017,14 +3360,78 @@ function PocketSettingsTab({ rpcCall, t }) {
           "div",
           { style: { marginTop: 6, fontSize: 12, color: "var(--dsw-alias-state-warn-primary,#b45309)", lineHeight: 1.5 } },
           t("lanPinOff")
+        ),
+        (0, import_react.createElement)(
+          "div",
+          { style: { marginTop: 10 } },
+          (0, import_react.createElement)("button", { style: { ...styles.btn, height: 28, padding: "0 12px", fontSize: 12 }, onClick: () => setLanAccess(false), disabled: lanBusy }, t("close"))
         )
-      ) : (0, import_react.createElement)("div", { style: styles.muted }, t("lanStarting"))
+      ) : (0, import_react.createElement)("div", { style: styles.muted }, t("lanStarting")) : (0, import_react.createElement)(
+        "div",
+        { style: { marginTop: 4 } },
+        (0, import_react.createElement)("div", { style: styles.muted }, t("lanDisabled")),
+        (0, import_react.createElement)("button", { style: { ...styles.primary, marginTop: 8, height: 30, padding: "0 14px", fontSize: 12 }, onClick: () => setLanAccess(true), disabled: lanBusy }, t("lanEnable"))
+      )
     ),
     // 公网
     (0, import_react.createElement)(
       "div",
       { style: styles.block },
-      (0, import_react.createElement)("div", { style: { fontWeight: 600, fontSize: 13 } }, t("wanTitle")),
+      (0, import_react.createElement)(
+        "div",
+        { style: { display: "flex", alignItems: "center", gap: 8, fontWeight: 600, fontSize: 13 } },
+        t("wanTitle"),
+        status?.tunnelMode === "fixed" ? (0, import_react.createElement)("span", { style: { display: "inline-block", marginLeft: 8, padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 600, background: "var(--dsw-alias-brand-primary,#4f6ef7)", color: "#fff" } }, t("fixedMode")) : status?.tunnelMode === "quick" ? (0, import_react.createElement)("span", { style: { display: "inline-block", marginLeft: 8, padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 600, background: "var(--dsw-alias-state-warn-primary,#b45309)", color: "#fff" } }, t("randomMode")) : publicBase ? (0, import_react.createElement)("span", { style: { display: "inline-block", marginLeft: 8, padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 600, background: "var(--dsw-alias-brand-primary,#4f6ef7)", color: "#fff" } }, t("fixedMode")) : null
+      ),
+      // 公网固定地址（named tunnel）：保存后公网二维码改用此地址，登录状态跨重启保持
+      (0, import_react.createElement)(
+        "div",
+        { style: { marginTop: 8 } },
+        (0, import_react.createElement)("div", { style: { fontSize: 12, fontWeight: 600, color: "var(--dsw-alias-label-secondary,#6b7280)" } }, t("publicBaseTitle")),
+        (0, import_react.createElement)(
+          "div",
+          { style: { display: "flex", gap: 8, marginTop: 6 } },
+          (0, import_react.createElement)("input", {
+            style: { flex: 1, font: "inherit", height: 30, padding: "0 10px", fontSize: 12, borderRadius: 8, border: "1px solid var(--dsw-alias-border-l2,#d1d5db)", background: "var(--dsw-alias-bg-layer-1,#fff)", color: "var(--dsw-alias-label-primary,inherit)", outline: "none" },
+            type: "url",
+            placeholder: t("publicBasePlaceholder"),
+            value: baseValue,
+            onChange: (e) => setBaseInput(e.target.value),
+            onKeyDown: (e) => {
+              if (e.key === "Enter") savePublicBase();
+            },
+            spellCheck: false
+          }),
+          (0, import_react.createElement)("button", { style: { ...styles.btn, height: 30, padding: "0 12px", fontSize: 12 }, onClick: savePublicBase, disabled: busy || !!baseError || (baseInput ?? "") === (publicBase ?? "") }, t("save")),
+          publicBase ? (0, import_react.createElement)("button", { style: { ...styles.btn, height: 30, padding: "0 12px", fontSize: 12 }, onClick: clearPublicBase, disabled: busy }, t("publicBaseClear")) : null
+        ),
+        baseError ? (0, import_react.createElement)("div", { style: { color: "var(--dsw-alias-state-error-primary,#dc2626)", fontSize: 12, marginTop: 4 } }, t(baseError)) : null,
+        (0, import_react.createElement)("div", { style: { ...styles.muted, marginTop: 4 } }, t("publicBaseHint"))
+      ),
+      publicBase ? (0, import_react.createElement)(
+        "div",
+        { style: { marginTop: 8 } },
+        (0, import_react.createElement)("div", { style: { fontSize: 12, fontWeight: 600, color: "var(--dsw-alias-label-secondary,#6b7280)" } }, t("cfModeTitle")),
+        (0, import_react.createElement)(
+          "div",
+          { style: { display: "flex", gap: 8, marginTop: 6 } },
+          (0, import_react.createElement)("button", { style: { ...styles.btn, height: 30, padding: "0 12px", fontSize: 12, fontWeight: cfMode === "cli" ? 600 : 400, background: cfMode === "cli" ? "var(--dsw-alias-button-primary-fill, var(--dsw-alias-brand-primary,#4f6ef7))" : "var(--dsw-alias-bg-layer-1,#fff)", color: cfMode === "cli" ? "var(--dsw-alias-label-primary-foreground, #fff)" : "var(--dsw-alias-label-primary,inherit)" }, onClick: () => saveCfMode("cli"), disabled: cfBusy }, t("cfModeCli")),
+          (0, import_react.createElement)("button", { style: { ...styles.btn, height: 30, padding: "0 12px", fontSize: 12, fontWeight: cfMode === "api" ? 600 : 400, background: cfMode === "api" ? "var(--dsw-alias-button-primary-fill, var(--dsw-alias-brand-primary,#4f6ef7))" : "var(--dsw-alias-bg-layer-1,#fff)", color: cfMode === "api" ? "var(--dsw-alias-label-primary-foreground, #fff)" : "var(--dsw-alias-label-primary,inherit)" }, onClick: () => saveCfMode("api"), disabled: cfBusy }, t("cfModeApi"))
+        ),
+        cfMode === "cli" ? (0, import_react.createElement)("div", { style: { ...styles.muted, marginTop: 4 } }, t("cfModeHintCli")) : cfMode === "api" ? (0, import_react.createElement)(
+          "div",
+          null,
+          (0, import_react.createElement)("div", { style: { ...styles.muted, marginTop: 4 } }, t("cfModeHintApi")),
+          (0, import_react.createElement)(
+            "div",
+            { style: { display: "flex", gap: 8, marginTop: 6 } },
+            (0, import_react.createElement)("input", { style: { flex: 1, font: "inherit", height: 30, padding: "0 10px", fontSize: 12, borderRadius: 8, border: "1px solid var(--dsw-alias-border-l2,#d1d5db)", background: "var(--dsw-alias-bg-layer-1,#fff)", color: "var(--dsw-alias-label-primary,inherit)", outline: "none" }, type: "password", placeholder: cfTokenSet ? t("cfTokenSaved") : t("cfTokenPlaceholder"), value: cfTokenInput, onChange: (e) => setCfTokenInput(e.target.value), spellCheck: false, autoComplete: "off" }),
+            (0, import_react.createElement)("button", { style: { ...styles.btn, height: 30, padding: "0 12px", fontSize: 12 }, onClick: saveCfToken, disabled: cfBusy || !(cfTokenInput ?? "").trim() }, cfTokenSet ? t("cfTokenReplace") : t("cfTokenSave")),
+            cfTokenSet ? (0, import_react.createElement)("button", { style: { ...styles.btn, height: 30, padding: "0 12px", fontSize: 12 }, onClick: clearCfToken, disabled: cfBusy }, t("cfTokenClear")) : null
+          ),
+          cfTokenSet ? (0, import_react.createElement)("div", { style: { ...styles.muted, marginTop: 4 } }, t("cfTokenSavedHint")) : null
+        ) : (0, import_react.createElement)("div", { style: { ...styles.muted, marginTop: 4 } }, t("cfModePickHint"))
+      ) : null,
       tunnelUrl ? (0, import_react.createElement)(
         "div",
         null,
@@ -3038,11 +3445,25 @@ function PocketSettingsTab({ rpcCall, t }) {
           customBtn("public"),
           status?.publicPinCustom ? (0, import_react.createElement)("div", { style: { marginTop: 2, fontSize: 11, color: "var(--dsw-alias-state-warn-primary,#b45309)" } }, t("pinCustomHint")) : null
         ) : null,
-        (0, import_react.createElement)("button", { style: styles.btn, onClick: stopTunnel }, t("stopTunnel"))
+        (0, import_react.createElement)(
+          "div",
+          { style: { display: "flex", gap: 8, margin: "8px 0" } },
+          publicBase ? [
+            (0, import_react.createElement)("button", { style: status?.tunnelMode === "fixed" ? styles.primary : styles.btn, onClick: status?.tunnelMode === "fixed" ? stopTunnel : () => startTunnel(), disabled: busy || tunnelStarting }, status?.tunnelMode === "fixed" ? t("close") : busy ? t("opening") : t("enableFixed")),
+            (0, import_react.createElement)("button", { style: status?.tunnelMode === "quick" ? styles.primary : styles.btn, onClick: status?.tunnelMode === "quick" ? stopTunnel : () => startTunnel(true), disabled: busy || tunnelStarting }, status?.tunnelMode === "quick" ? t("close") : busy ? t("opening") : t("enableBackup"))
+          ] : (0, import_react.createElement)("button", { style: { ...status?.tunnelMode === "quick" ? styles.primary : styles.btn }, onClick: status?.tunnelMode === "quick" ? stopTunnel : () => startTunnel(), disabled: busy || tunnelStarting }, status?.tunnelMode === "quick" ? t("close") : busy ? t("opening") : t("enable"))
+        )
       ) : (0, import_react.createElement)(
         "div",
         null,
-        (0, import_react.createElement)("button", { style: { ...styles.primary, margin: "8px 0" }, onClick: startTunnel, disabled: busy || tunnelStarting }, busy ? t("opening") : t("enable")),
+        (0, import_react.createElement)(
+          "div",
+          { style: { display: "flex", gap: 8, margin: "8px 0" } },
+          publicBase ? [
+            (0, import_react.createElement)("button", { style: status?.tunnelMode === "fixed" ? styles.primary : styles.btn, onClick: status?.tunnelMode === "fixed" ? stopTunnel : () => startTunnel(), disabled: busy || tunnelStarting }, status?.tunnelMode === "fixed" ? t("close") : busy ? t("opening") : t("enableFixed")),
+            (0, import_react.createElement)("button", { style: status?.tunnelMode === "quick" ? styles.primary : styles.btn, onClick: status?.tunnelMode === "quick" ? stopTunnel : () => startTunnel(true), disabled: busy || tunnelStarting }, status?.tunnelMode === "quick" ? t("close") : busy ? t("opening") : t("enableBackup"))
+          ] : (0, import_react.createElement)("button", { style: { ...status?.tunnelMode === "quick" ? styles.primary : styles.btn }, onClick: status?.tunnelMode === "quick" ? stopTunnel : () => startTunnel(), disabled: busy || tunnelStarting }, status?.tunnelMode === "quick" ? t("close") : busy ? t("opening") : t("enable"))
+        ),
         tunnelStarting ? (0, import_react.createElement)(
           "div",
           { style: { marginTop: 4, fontSize: 12, color: "var(--dsw-alias-label-secondary,#6b7280)" } },
@@ -3052,6 +3473,40 @@ function PocketSettingsTab({ rpcCall, t }) {
           { style: { marginTop: 4, fontSize: 12, color: "var(--dsw-alias-state-error-primary,#dc2626)" } },
           fmt(t, "error", { detail: tunnelStateDetail || t("unknownError") })
         ) : null
+      )
+    ),
+    // 已配对设备（t14）：仅当前公网入口 Host；逐台/全部撤销
+    (0, import_react.createElement)(
+      "div",
+      { style: styles.block },
+      (0, import_react.createElement)(
+        "div",
+        { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 } },
+        (0, import_react.createElement)("div", { style: { fontWeight: 600, fontSize: 13 } }, t("devicesTitle")),
+        publicHost && devices?.length ? (0, import_react.createElement)("button", { style: { ...styles.btn, height: 28, padding: "0 12px", fontSize: 12 }, onClick: () => setRevokeTarget("all"), disabled: revokeBusy }, t("deviceRevokeAll")) : null
+      ),
+      (0, import_react.createElement)("div", { style: { ...styles.muted, marginTop: 4 } }, t("devicesHint")),
+      devices === null ? (0, import_react.createElement)("div", { style: { ...styles.muted, marginTop: 8 } }, t("devicesLoading")) : devices.length === 0 ? (0, import_react.createElement)("div", { style: { ...styles.muted, marginTop: 8 } }, t("devicesEmpty")) : (0, import_react.createElement)(
+        "div",
+        { style: { marginTop: 8 } },
+        devices.map((d) => (0, import_react.createElement)(
+          "div",
+          { key: d.id, style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "8px 0", borderBottom: "1px solid var(--dsw-alias-border-l2,#e5e7eb)" } },
+          (0, import_react.createElement)(
+            "div",
+            null,
+            (0, import_react.createElement)(
+              "div",
+              { style: { display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 500 } },
+              d.name,
+              (0, import_react.createElement)("span", { style: { fontSize: 11, fontWeight: 400, color: "var(--dsw-alias-label-tertiary,#8b93a1)" } }, `#${d.shortId || d.id.slice(0, 6)}`),
+              (0, import_react.createElement)("span", { style: { width: 8, height: 8, borderRadius: 999, background: d.online && status?.tunnelRunning ? "#16a34a" : "#9ca3af", display: "inline-block" } }),
+              (0, import_react.createElement)("span", { style: { fontSize: 11, fontWeight: 400, color: d.online && status?.tunnelRunning ? "#16a34a" : "var(--dsw-alias-label-tertiary,#8b93a1)" } }, d.online && status?.tunnelRunning ? t("deviceOnline") : t("deviceOffline"))
+            ),
+            (0, import_react.createElement)("div", { style: { ...styles.muted, marginTop: 2 } }, fmt(t, "deviceMeta", { first: formatTime(d.createdAt), last: formatTime(d.lastSeenAt) }))
+          ),
+          (0, import_react.createElement)("button", { style: { ...styles.btn, height: 26, padding: "0 10px", fontSize: 12 }, onClick: () => setRevokeTarget(d), disabled: revokeBusy }, t("deviceRevoke"))
+        ))
       )
     ),
     error ? (0, import_react.createElement)("div", { style: { color: "var(--dsw-alias-state-error-primary,#dc2626)", fontSize: 12, marginTop: 8 } }, `\u274C ${error}`) : null,
@@ -3081,6 +3536,23 @@ function PocketSettingsTab({ rpcCall, t }) {
           }, t("disclaimerAgree"))
         ),
         !disclaimerChecked ? (0, import_react.createElement)("div", { style: { marginTop: 8, fontSize: 12, color: "var(--dsw-alias-state-error-primary,#dc2626)" } }, t("disclaimerHint")) : null
+      )
+    ) : null,
+    // 撤销设备确认弹层（t14）：撤销后该设备下次访问需重新输入 PIN
+    revokeTarget ? (0, import_react.createElement)(
+      "div",
+      { style: { position: "fixed", inset: 0, zIndex: 1e4, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 } },
+      (0, import_react.createElement)(
+        "div",
+        { style: { background: "var(--dsw-alias-bg-layer-1,#fff)", borderRadius: 12, maxWidth: 420, width: "100%", padding: "20px 22px", boxShadow: "0 8px 32px rgba(0,0,0,.18)" } },
+        (0, import_react.createElement)("div", { style: { fontWeight: 600, fontSize: 15, color: "var(--dsw-alias-state-error-primary,#dc2626)", marginBottom: 10 } }, revokeTarget === "all" ? t("deviceRevokeAllTitle") : t("deviceRevokeTitle")),
+        (0, import_react.createElement)("div", { style: { fontSize: 13, lineHeight: 1.7, color: "var(--dsw-alias-label-primary,inherit)" } }, revokeTarget === "all" ? t("deviceRevokeAllBody") : t("deviceRevokeBody")),
+        (0, import_react.createElement)(
+          "div",
+          { style: { display: "flex", gap: 8, marginTop: 16 } },
+          (0, import_react.createElement)("button", { style: { ...styles.btn, flex: 1 }, onClick: () => setRevokeTarget(null), disabled: revokeBusy }, t("cancel")),
+          (0, import_react.createElement)("button", { style: { ...styles.primary, flex: 1, background: "var(--dsw-alias-state-error-primary,#dc2626)" }, onClick: confirmRevokeDevice, disabled: revokeBusy }, revokeBusy ? t("revoking") : revokeTarget === "all" ? t("deviceRevokeAll") : t("deviceRevoke"))
+        )
       )
     ) : null,
     // 页面最底部：反馈入口

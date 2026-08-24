@@ -4,9 +4,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { connect } from 'node:net';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { WebSocket, WebSocketServer } from 'ws';
 
 import { createPocketProxy } from '../lib/proxy.mjs';
+import { createDeviceRegistry } from '../lib/devices.mjs';
 
 /** 构造一个带掩码的 WS 文本帧（浏览器在握手后立即发的首帧，会进 upgrade 的 head）。 */
 function maskedTextFrame(text) {
@@ -111,6 +115,33 @@ test('WebSocket upgrade：原样透传（DSH 流式通道的前提）', async ()
   } finally {
     await proxy.close();
     await new Promise((r) => up.server.close(r));
+  }
+});
+
+test('WS upgrade：设备活跃连接登记，断开后立即离线', async () => {
+  const up = await fakeUpstream();
+  const home = mkdtempSync(join(tmpdir(), 'dshp-ws-active-'));
+  const registry = createDeviceRegistry({ home, flushMs: 60_000 });
+  const issued = registry.issue('abc.trycloudflare.com', 'iPhone');
+  const proxy = await createPocketProxy({
+    port: 0, host: '127.0.0.1',
+    upstream: { host: '127.0.0.1', port: up.port },
+    auth: { getToken: () => '12345678', isProtected: () => true, devices: registry },
+  });
+  try {
+    const ws = new WebSocket(`ws://127.0.0.1:${proxy.port}/api/events.host`, [], {
+      headers: { Host: 'abc.trycloudflare.com', Cookie: `dsh_pocket_token=${issued.token}` },
+    });
+    await new Promise((resolve, reject) => { ws.on('open', resolve); ws.on('error', reject); });
+    assert.equal(registry.list('abc.trycloudflare.com')[0].online, true, 'WS 建立后设备在线');
+    ws.close();
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(registry.list('abc.trycloudflare.com')[0].online, false, 'WS 断开后设备立即离线');
+  } finally {
+    try { await proxy.close(); } catch { /* 已关 */ }
+    await new Promise((r) => up.server.close(r));
+    await registry.dispose();
+    rmSync(home, { recursive: true, force: true });
   }
 });
 
@@ -687,4 +718,51 @@ test('advancedNoticeScript：注入 advanced 模式提示覆盖层（issue #19�
   assert.ok(s.includes('advanced'), '提示 advanced');
   assert.ok(s.includes('compatibility'), '提示切回 compatibility');
   assert.ok(s.includes('position:fixed'), '固定覆盖层（白屏也能看到）');
+});
+
+test('固定域名入口围栏：sessionKeyFor 按 Host 解析——固定域名用持久 key，其余回退 sessionKey', async () => {
+  const http = await import('node:http');
+  const crypto = await import('node:crypto');
+  const TOKEN = '12345678';
+  const up = createServer((req, res) => { res.writeHead(200); res.end('ok'); });
+  await new Promise((r) => up.listen(0, '127.0.0.1', r));
+  let stableCalls = 0;
+  const proxy = await createPocketProxy({
+    port: 0, host: '127.0.0.1',
+    upstream: { host: '127.0.0.1', port: up.address().port },
+    auth: {
+      getToken: () => TOKEN,
+      isProtected: () => true,
+      sessionKey: 'process-key',
+      sessionKeyFor: (host) => {
+        if (/^fixed\.example\.com$/i.test(String(host))) { stableCalls++; return 'stable-key'; }
+        return undefined;
+      },
+    },
+  });
+  const login = (host) => new Promise((resolve, reject) => {
+    const body = `token=${TOKEN}`;
+    const req = http.request({
+      host: '127.0.0.1', port: proxy.port, path: '/pocket-login', method: 'POST',
+      headers: { Host: host, 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body) },
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => resolve(res.headers['set-cookie']?.[0] ?? null));
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+  const expectedCookie = (key) => crypto.createHash('sha256').update(`${TOKEN}:${key}`).digest('hex');
+  try {
+    const cFixed = await login('fixed.example.com');
+    assert.ok(cFixed.includes(expectedCookie('stable-key')), `固定域名 cookie 绑定持久 key（实际 ${cFixed}）`);
+    const cOther = await login('abc.trycloudflare.com');
+    assert.ok(cOther.includes(expectedCookie('process-key')), `其余 Host 回退进程级 key（实际 ${cOther}）`);
+    assert.ok(stableCalls >= 1, 'sessionKeyFor 被固定域名请求调用过');
+  } finally {
+    await proxy.close();
+    await new Promise((r) => up.close(r));
+  }
 });
