@@ -50,6 +50,7 @@ var POCKET_ENDPOINTS = Object.freeze({
   restart: "pocket.restart",
   lanTokenRefresh: "token.lanRefresh",
   lanAuthSetEnabled: "lanAuth.setEnabled",
+  lanSetEnabled: "lan.setEnabled",
   lanSetOverride: "lan.setOverride",
   pinSetCustom: "pin.setCustom",
   publicBaseGet: "pocket.publicBase.get",
@@ -95,6 +96,7 @@ function redactStatus(s) {
   return {
     proxyRunning: s?.proxyRunning === true,
     proxyPort: s?.proxyPort ?? null,
+    lanEnabled: s?.lanEnabled !== false,
     lanUrl: s?.lanUrl ?? null,
     lanQr: s?.lanQr ?? null,
     lanCandidates: Array.isArray(s?.lanCandidates) ? s.lanCandidates : [],
@@ -2701,6 +2703,8 @@ var zh2 = {
   "pinInvalid": "\u5BC6\u7801\u5FC5\u987B\u662F 8 \u4F4D\u6570\u5B57",
   "pinCustomHint": "\u81EA\u5B9A\u4E49\u540E\u5F00\u542F\u516C\u7F51\u4E0D\u518D\u81EA\u52A8\u6362\u65B0",
   "lanPinOff": "\u{1F513} \u5BC6\u7801\u5DF2\u5173\u95ED\uFF1A\u626B\u7801\u76F4\u8FDE\uFF0C\u65E0\u9700\u5BC6\u7801\uFF08\u4EC5\u540C\u4E00\u5C40\u57DF\u7F51\u8BBE\u5907\u53EF\u8BBF\u95EE\uFF1B\u516C\u7F51\u4ECD\u8981\u5BC6\u7801\uFF09",
+  "lanDisabled": "\u5C40\u57DF\u7F51\u8BBF\u95EE\u5DF2\u5173\u95ED\uFF1A\u624B\u673A\u65E0\u6CD5\u901A\u8FC7\u5C40\u57DF\u7F51\u8BBF\u95EE\uFF08\u516C\u7F51\u96A7\u9053\u4E0D\u53D7\u5F71\u54CD\uFF09",
+  "lanEnable": "\u5F00\u542F\u5C40\u57DF\u7F51",
   "lanStarting": "\u4EE3\u7406\u672A\u5C31\u7EEA\u2026",
   "wanTitle": "\u{1F310} \u516C\u7F51\uFF08\u4EBA\u5728\u5916\u9762\uFF09",
   "wanHint": "\u4EFB\u4F55\u7F51\u7EDC\u626B\u7801\u5373\u7528\uFF08URL \u6BCF\u6B21\u91CD\u542F\u81EA\u52A8\u6362\u65B0\uFF09",
@@ -2802,6 +2806,8 @@ var en2 = {
   "pinInvalid": "PIN must be exactly 8 digits",
   "pinCustomHint": "custom PINs are not rotated on tunnel start",
   "lanPinOff": "\u{1F513} PIN off \u2014 scan & go, no PIN (LAN devices only; public still requires PIN)",
+  "lanDisabled": "LAN access is off: phones cannot reach this computer over LAN (public tunnel is unaffected)",
+  "lanEnable": "Enable LAN",
   "lanStarting": "Proxy starting\u2026",
   "wanTitle": "\u{1F310} Anywhere (public)",
   "wanHint": "Scan from any network (the URL changes on every restart)",
@@ -2918,6 +2924,7 @@ var styles = {
 function PocketSettingsTab({ rpcCall, t }) {
   const [status, setStatus] = (0, import_react.useState)(null);
   const [busy, setBusy] = (0, import_react.useState)(false);
+  const [lanBusy, setLanBusy] = (0, import_react.useState)(false);
   const [error, setError] = (0, import_react.useState)(null);
   const [tunnelState, setTunnelState] = (0, import_react.useState)(null);
   const [restartNotice, setRestartNotice] = (0, import_react.useState)(false);
@@ -3070,6 +3077,16 @@ function PocketSettingsTab({ rpcCall, t }) {
       const r = await call(POCKET_ENDPOINTS.lanAuthSetEnabled, { on });
       setStatus((s) => ({ ...s, lanAuthEnabled: r.lanAuthEnabled }));
     } catch {
+    }
+  };
+  const setLanAccess = async (on) => {
+    setLanBusy(true);
+    try {
+      setStatus(await call(POCKET_ENDPOINTS.lanSetEnabled, { on }));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLanBusy(false);
     }
   };
   const setLanAddress = async (ip) => {
@@ -3303,8 +3320,13 @@ function PocketSettingsTab({ rpcCall, t }) {
     (0, import_react.createElement)(
       "div",
       { style: styles.block },
-      (0, import_react.createElement)("div", { style: { fontWeight: 600, fontSize: 13 } }, t("lanTitle")),
-      lanUrl ? (0, import_react.createElement)(
+      (0, import_react.createElement)(
+        "div",
+        { style: { display: "flex", alignItems: "center", gap: 8, fontWeight: 600, fontSize: 13 } },
+        t("lanTitle"),
+        status?.lanEnabled !== false ? (0, import_react.createElement)("button", { style: { ...styles.btn, height: 28, padding: "0 12px", fontSize: 12, marginLeft: "auto" }, onClick: () => setLanAccess(false), disabled: lanBusy }, t("close")) : null
+      ),
+      status?.lanEnabled !== false ? lanUrl ? (0, import_react.createElement)(
         "div",
         null,
         (0, import_react.createElement)("img", { src: status.lanQr, alt: "LAN QR", style: styles.qr }),
@@ -3351,7 +3373,12 @@ function PocketSettingsTab({ rpcCall, t }) {
           { style: { marginTop: 6, fontSize: 12, color: "var(--dsw-alias-state-warn-primary,#b45309)", lineHeight: 1.5 } },
           t("lanPinOff")
         )
-      ) : (0, import_react.createElement)("div", { style: styles.muted }, t("lanStarting"))
+      ) : (0, import_react.createElement)("div", { style: styles.muted }, t("lanStarting")) : (0, import_react.createElement)(
+        "div",
+        { style: { marginTop: 4 } },
+        (0, import_react.createElement)("div", { style: styles.muted }, t("lanDisabled")),
+        (0, import_react.createElement)("button", { style: { ...styles.primary, marginTop: 8, height: 30, padding: "0 14px", fontSize: 12 }, onClick: () => setLanAccess(true), disabled: lanBusy }, t("lanEnable"))
+      )
     ),
     // 公网
     (0, import_react.createElement)(

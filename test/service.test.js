@@ -227,6 +227,54 @@ test('RPC：lan.setOverride 设置/清除覆盖地址，非法 IP 被拒绝', as
   await service.dispose();
 });
 
+test('RPC：lan.setEnabled 关闭后代理只绑 127.0.0.1，status.lanUrl 置空', async () => {
+  let lanOn = true;
+  const hosts = [];
+  const internals = {
+    ...stubInternals(),
+    createProxy: async ({ port, host }) => {
+      hosts.push(host);
+      return { port, close: async () => {} };
+    },
+  };
+  const service = createPocketService({
+    dshPort: 3080,
+    port: 3081,
+    internals,
+    getLanEnabled: () => lanOn,
+  });
+  const conn = fakeCtxConnection();
+  installPocketRpc({ connection: conn }, {
+    service,
+    getLanEnabled: () => lanOn,
+    setLanEnabled: (on) => { lanOn = !!on; return lanOn; },
+    log: { error() {}, warn() {} },
+  });
+  await service.startProxy();
+  assert.equal(hosts[0], '0.0.0.0', '默认局域网开启时绑 0.0.0.0');
+  let st = await conn.handler(POCKET_ENDPOINTS.status, {});
+  assert.equal(st.value.lanEnabled, true);
+  assert.equal(st.value.lanUrl, 'http://192.168.1.50:3081');
+
+  const off = await conn.handler(POCKET_ENDPOINTS.lanSetEnabled, { on: false });
+  assert.equal(off.ok, true);
+  assert.equal(off.value.lanEnabled, false, '关闭后状态同步');
+  assert.equal(off.value.lanUrl, null, 'LAN URL 不再暴露');
+  assert.equal(hosts.at(-1), '127.0.0.1', '关闭后代理重建为仅回环');
+
+  st = await conn.handler(POCKET_ENDPOINTS.status, {});
+  assert.equal(st.value.lanEnabled, false);
+  assert.equal(st.value.lanUrl, null);
+
+  const on = await conn.handler(POCKET_ENDPOINTS.lanSetEnabled, { on: true });
+  assert.equal(on.ok, true);
+  assert.equal(on.value.lanEnabled, true);
+  assert.equal(on.value.lanUrl, 'http://192.168.1.50:3081');
+  assert.equal(hosts.at(-1), '0.0.0.0', '重新开启后恢复全网卡绑定');
+
+  await service.dispose();
+});
+
 test('RPC：status 携带重启提示（restartNotice）', async () => {
   const internals = stubInternals();
   const service = createPocketService({ dshPort: 3080, port: 3081, internals });
