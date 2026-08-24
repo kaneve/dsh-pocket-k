@@ -4,9 +4,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { connect } from 'node:net';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { WebSocket, WebSocketServer } from 'ws';
 
 import { createPocketProxy } from '../lib/proxy.mjs';
+import { createDeviceRegistry } from '../lib/devices.mjs';
 
 /** 构造一个带掩码的 WS 文本帧（浏览器在握手后立即发的首帧，会进 upgrade 的 head）。 */
 function maskedTextFrame(text) {
@@ -111,6 +115,33 @@ test('WebSocket upgrade：原样透传（DSH 流式通道的前提）', async ()
   } finally {
     await proxy.close();
     await new Promise((r) => up.server.close(r));
+  }
+});
+
+test('WS upgrade：设备活跃连接登记，断开后立即离线', async () => {
+  const up = await fakeUpstream();
+  const home = mkdtempSync(join(tmpdir(), 'dshp-ws-active-'));
+  const registry = createDeviceRegistry({ home, flushMs: 60_000 });
+  const issued = registry.issue('abc.trycloudflare.com', 'iPhone');
+  const proxy = await createPocketProxy({
+    port: 0, host: '127.0.0.1',
+    upstream: { host: '127.0.0.1', port: up.port },
+    auth: { getToken: () => '12345678', isProtected: () => true, devices: registry },
+  });
+  try {
+    const ws = new WebSocket(`ws://127.0.0.1:${proxy.port}/api/events.host`, [], {
+      headers: { Host: 'abc.trycloudflare.com', Cookie: `dsh_pocket_token=${issued.token}` },
+    });
+    await new Promise((resolve, reject) => { ws.on('open', resolve); ws.on('error', reject); });
+    assert.equal(registry.list('abc.trycloudflare.com')[0].online, true, 'WS 建立后设备在线');
+    ws.close();
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(registry.list('abc.trycloudflare.com')[0].online, false, 'WS 断开后设备立即离线');
+  } finally {
+    try { await proxy.close(); } catch { /* 已关 */ }
+    await new Promise((r) => up.server.close(r));
+    await registry.dispose();
+    rmSync(home, { recursive: true, force: true });
   }
 });
 

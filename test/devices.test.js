@@ -47,11 +47,15 @@ test('devices registry：铸造/校验/列出/撤销/持久化', async () => {
     assert.equal(reg.check('other.example', issued.token), false, 'host 隔离');
     assert.equal(reg.check('abc.trycloudflare.com', 'not-a-real-token'), false);
 
+    reg.wsOpen('abc.trycloudflare.com', issued.id); // 模拟远程页面建立 WebSocket
     const list = reg.list('abc.trycloudflare.com');
     assert.equal(list.length, 1);
     assert.equal(list[0].name, 'iPhone', 'UA 只展示轻量平台名');
-    assert.equal(list[0].online, true);
+    assert.equal(list[0].online, true, '有活跃 WS 连接时在线');
     assert.ok(list[0].lastSeenAt >= list[0].createdAt, 'lastSeenAt 不早于 createdAt');
+
+    reg.wsClose('abc.trycloudflare.com', issued.id); // 模拟页面断开
+    assert.equal(reg.list('abc.trycloudflare.com')[0].online, false, '断开后立即离线');
 
     await reg.flush();
     const raw = JSON.parse(await readFile(join(home, 'dsh-pocket', 'devices.json'), 'utf8'));
