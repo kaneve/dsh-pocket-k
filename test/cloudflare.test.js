@@ -49,10 +49,10 @@ function fakeStream(records) {
       return jsonResponse({ success: true, result: { id: 'tun-new', name: 'dsh-pocket-fixed' } });
     }
     if (path === '/accounts/acc1/cfd_tunnel/tun-exist/token') {
-      return jsonResponse({ success: true, result: { token: 'tk-exist' } });
+      return jsonResponse({ success: true, result: 'tk-exist' }); // 官方实际返回字符串
     }
     if (path === '/accounts/acc1/cfd_tunnel/tun-new/token') {
-      return jsonResponse({ success: true, result: { token: 'tk-new' } });
+      return jsonResponse({ success: true, result: 'tk-new' });
     }
     if (path === '/zones/zone2/dns_records' && method === 'GET') {
       return jsonResponse({ success: true, result: [{ id: 'rec1', name: 'dsh.dslink.cc', type: 'CNAME', content: 'tun-exist.cfargotunnel.com' }] });
