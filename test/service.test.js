@@ -800,3 +800,104 @@ test('公网固定地址清除后：快速隧道未跑 tunnelUrl=null；跑起�
     await service.dispose();
   }
 });
+
+test('公网固定地址：startTunnel 走 named tunnel（cli/api）；quick 标志回退快速隧道', async () => {
+  const namedCalls = [];
+  const quickCalls = [];
+  const internals = {
+    encodeQr: async (t) => `qr:${t}`,
+    startNamedTunnel: async (opts) => {
+      namedCalls.push(opts);
+      return { url: opts.base, kill: () => {} };
+    },
+    startTunnel: async (opts) => {
+      quickCalls.push(opts);
+      return 'https://abc-123.trycloudflare.com';
+    },
+  };
+  const service = createPocketService({
+    dshPort: 3080,
+    port: 3081,
+    internals,
+    getPublicBaseUrl: () => 'https://dsh.example.com',
+    getCfMode: () => 'api',
+    getCfApiToken: () => 'tok',
+  });
+  try {
+    await service.startProxy();
+    await service.startTunnel();
+    let s = await service.status();
+    assert.equal(s.tunnelRunning, true);
+    assert.equal(s.tunnelUrl, 'https://dsh.example.com', 'named 运行时 URL=固定域名');
+    assert.equal(s.tunnelMode, 'fixed');
+    assert.equal(namedCalls.length, 1);
+    assert.equal(namedCalls[0].mode, 'api');
+    assert.equal(namedCalls[0].apiToken, 'tok');
+    assert.equal(namedCalls[0].base, 'https://dsh.example.com');
+
+    await service.stopTunnel();
+    await service.startTunnel({ quick: true });
+    s = await service.status();
+    assert.equal(s.tunnelRunning, true);
+    assert.equal(s.tunnelUrl, 'https://abc-123.trycloudflare.com', '快速备用运行时 URL=快速隧道');
+    assert.equal(s.tunnelMode, 'quick');
+    assert.equal(quickCalls.length, 1);
+  } finally {
+    await service.dispose();
+  }
+});
+
+test('公网固定地址：CLI 模式把 mode=cli 传给 named 启动器', async () => {
+  let seen = null;
+  const internals = {
+    encodeQr: async (t) => `qr:${t}`,
+    startNamedTunnel: async (opts) => { seen = opts; return { url: opts.base, kill: () => {} }; },
+  };
+  const service = createPocketService({
+    dshPort: 3080,
+    port: 3081,
+    internals,
+    getPublicBaseUrl: () => 'https://dsh.example.com',
+    getCfMode: () => 'cli',
+    getCfApiToken: () => null,
+  });
+  try {
+    await service.startProxy();
+    await service.startTunnel();
+    assert.equal(seen.mode, 'cli');
+    assert.equal(seen.apiToken, null);
+  } finally {
+    await service.dispose();
+  }
+});
+
+test('RPC：cfMode / cfToken 状态与设置端点', async () => {
+  const conn = fakeCtxConnection();
+  let mode = null;
+  let token = null;
+  const dispose = installPocketRpc({ connection: conn }, {
+    service: { status: async () => ({}) },
+    getCfMode: () => mode,
+    setCfMode: (m) => (mode = m),
+    clearCfMode: () => (mode = null),
+    getCfApiToken: () => token,
+    setCfApiToken: (t) => { token = t || null; return Boolean(t); },
+    clearCfApiToken: () => { token = null; return false; },
+  });
+  try {
+    let r = await conn.handler(POCKET_ENDPOINTS.cfModeSet, { mode: 'api' });
+    assert.equal(r.ok, true);
+    assert.equal(mode, 'api');
+    r = await conn.handler(POCKET_ENDPOINTS.cfTokenSet, { token: 'tok' });
+    assert.equal(r.ok, true);
+    assert.equal(token, 'tok');
+    r = await conn.handler(POCKET_ENDPOINTS.status, {});
+    assert.equal(r.value.cfMode, 'api');
+    assert.equal(r.value.cfTokenSet, true);
+    r = await conn.handler(POCKET_ENDPOINTS.cfTokenClear, {});
+    assert.equal(r.ok, true);
+    assert.equal(token, null);
+  } finally {
+    dispose();
+  }
+});

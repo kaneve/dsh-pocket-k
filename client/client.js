@@ -55,6 +55,9 @@ var POCKET_ENDPOINTS = Object.freeze({
   publicBaseGet: "pocket.publicBase.get",
   publicBaseSet: "pocket.publicBase.set",
   publicBaseClear: "pocket.publicBase.clear",
+  cfModeSet: "pocket.cf.mode.set",
+  cfTokenSet: "pocket.cf.token.set",
+  cfTokenClear: "pocket.cf.token.clear",
   deviceList: "device.list",
   deviceRevoke: "device.revoke",
   deviceRevokeAll: "device.revokeAll"
@@ -100,6 +103,7 @@ function redactStatus(s) {
     tunnelUrl: s?.tunnelUrl ?? null,
     tunnelQr: s?.tunnelQr ?? null,
     tunnelState: s?.tunnelState ?? { phase: "idle" },
+    tunnelMode: s?.tunnelMode ?? null,
     publicBase: s?.publicBase ?? null,
     dshPort: s?.dshPort ?? null
   };
@@ -2708,6 +2712,19 @@ var zh2 = {
   "publicBasePlaceholder": "https://dsh.example.com",
   "publicBaseClear": "\u6E05\u9664",
   "publicBaseHint": "\u5728 Cloudflare \u63A7\u5236\u53F0\u521B\u5EFA named tunnel \u5E76\u6307\u5411\u672C\u673A 3081 \u7AEF\u53E3\uFF1B\u57DF\u540D\u9700\u6258\u7BA1\u5728 Cloudflare\uFF1B\u5927\u9646\u53EF\u8FBE\u6027\u8BF7\u81EA\u6D4B\u3002\u4FDD\u5B58\u540E\u516C\u7F51\u4E8C\u7EF4\u7801\u6539\u7528\u6B64\u5730\u5740\uFF0C\u767B\u5F55\u72B6\u6001\u8DE8\u91CD\u542F\u4FDD\u6301\u3002",
+  "cfModeTitle": "Cloudflare \u81EA\u52A8\u914D\u7F6E\u65B9\u5F0F",
+  "cfModeCli": "CLI \u767B\u5F55\uFF08cloudflared tunnel login\uFF09",
+  "cfModeApi": "API Token\uFF08\u65E0\u9700\u547D\u4EE4\u884C\uFF09",
+  "cfModePickHint": "\u8BF7\u9009\u62E9\u4E00\u79CD\u81EA\u52A8\u914D\u7F6E\u65B9\u5F0F\uFF1ACLI \u767B\u5F55\u6216 API Token\u3002",
+  "cfModeHintCli": "\u5148\u5728\u7EC8\u7AEF\u8FD0\u884C `cloudflared tunnel login` \u751F\u6210\u8BC1\u4E66\uFF0C\u4FDD\u5B58\u56FA\u5B9A\u57DF\u540D\u540E\u70B9\u300C\u5F00\u542F\u56FA\u5B9A\u57DF\u540D\u516C\u7F51\u300D\uFF0C\u63D2\u4EF6\u4F1A\u81EA\u52A8\u521B\u5EFA named tunnel\u3001\u914D\u7F6E DNS \u5E76\u542F\u52A8\u3002",
+  "cfModeHintApi": "\u7C98\u8D34 Cloudflare API Token\uFF08\u9700 Account > Cloudflare Tunnel > Edit \u548C Zone > DNS > Edit \u6743\u9650\uFF09\u3002\u63D2\u4EF6\u4F1A\u81EA\u52A8\u521B\u5EFA\u96A7\u9053\u3001\u914D\u7F6E DNS \u5E76\u542F\u52A8\uFF0C\u65E0\u9700\u547D\u4EE4\u884C\u3002",
+  "cfTokenPlaceholder": "\u7C98\u8D34 Cloudflare API Token",
+  "cfTokenSaved": "\u5DF2\u4FDD\u5B58 Token\uFF08\u4E0D\u56DE\u663E\uFF09",
+  "cfTokenSave": "\u4FDD\u5B58 Token",
+  "cfTokenReplace": "\u66FF\u6362 Token",
+  "cfTokenClear": "\u6E05\u9664",
+  "cfTokenSavedHint": "Token \u5DF2\u4FDD\u5B58\uFF0C\u4EC5\u5B58\u672C\u673A settings.json\uFF080600\uFF09\uFF0C\u4E0D\u4F1A\u56DE\u663E\u5230\u9875\u9762\u3002",
+  "enableFixed": "\u5F00\u542F\u56FA\u5B9A\u57DF\u540D\u516C\u7F51",
   "publicBaseErrMissing": "\u8BF7\u8F93\u5165 https:// \u5730\u5740",
   "publicBaseErrUrl": "\u4E0D\u662F\u5408\u6CD5\u7684 URL",
   "publicBaseErrProtocol": "\u4EC5\u652F\u6301 https://",
@@ -2795,6 +2812,19 @@ var en2 = {
   "publicBasePlaceholder": "https://dsh.example.com",
   "publicBaseClear": "Remove",
   "publicBaseHint": "Create a named tunnel in the Cloudflare dashboard pointing at local port 3081; the domain must be hosted on Cloudflare (reachability from mainland China may vary). Once saved, the public QR code uses this address and your login survives restarts.",
+  "cfModeTitle": "Cloudflare auto-setup",
+  "cfModeCli": "CLI login (cloudflared tunnel login)",
+  "cfModeApi": "API Token (no CLI needed)",
+  "cfModePickHint": "Choose an auto-setup method: CLI login or API Token.",
+  "cfModeHintCli": 'Run `cloudflared tunnel login` in a terminal first. After saving the fixed domain, click "Enable fixed-domain" and the plugin will create the named tunnel, set up DNS, and start it.',
+  "cfModeHintApi": "Paste a Cloudflare API Token (permissions: Account > Cloudflare Tunnel > Edit and Zone > DNS > Edit). The plugin creates the tunnel, configures DNS, and starts it \u2014 no CLI needed.",
+  "cfTokenPlaceholder": "Paste Cloudflare API Token",
+  "cfTokenSaved": "Token saved (not shown again)",
+  "cfTokenSave": "Save Token",
+  "cfTokenReplace": "Replace Token",
+  "cfTokenClear": "Clear",
+  "cfTokenSavedHint": "Token is stored only in local settings.json (0600) and is never echoed on this page.",
+  "enableFixed": "Enable fixed-domain",
   "publicBaseErrMissing": "Enter an https:// address",
   "publicBaseErrUrl": "Not a valid URL",
   "publicBaseErrProtocol": "Only https:// is supported",
@@ -2997,26 +3027,28 @@ function PocketSettingsTab({ rpcCall, t }) {
   };
   const [disclaimerOpen, setDisclaimerOpen] = (0, import_react.useState)(false);
   const [disclaimerChecked, setDisclaimerChecked] = (0, import_react.useState)(false);
-  const doStartTunnel = async () => {
+  const doStartTunnel = async (quick = false) => {
     setBusy(true);
     setError(null);
     setTunnelState({ phase: "starting", detail: "\u6B63\u5728\u5F00\u542F\u2026", startedAt: Date.now() });
     try {
-      setStatus(await call(POCKET_ENDPOINTS.tunnelStart, { disclaimer: true }));
+      setStatus(await call(POCKET_ENDPOINTS.tunnelStart, { disclaimer: true, ...quick ? { quick: true } : {} }));
     } catch (err) {
       setError(err.message);
     } finally {
       setBusy(false);
     }
   };
-  const startTunnel = () => {
+  const [startMode, setStartMode] = (0, import_react.useState)("fixed");
+  const startTunnel = (quick = false) => {
+    setStartMode(quick ? "quick" : "fixed");
     setDisclaimerChecked(false);
     setDisclaimerOpen(true);
   };
   const confirmDisclaimer = () => {
     if (!disclaimerChecked) return;
     setDisclaimerOpen(false);
-    doStartTunnel();
+    doStartTunnel(startMode === "quick");
   };
   const stopTunnel = async () => {
     try {
@@ -3109,6 +3141,46 @@ function PocketSettingsTab({ rpcCall, t }) {
       setError(err.message);
     } finally {
       setBusy(false);
+    }
+  };
+  const cfMode = status?.cfMode ?? null;
+  const cfTokenSet = !!status?.cfTokenSet;
+  const [cfTokenInput, setCfTokenInput] = (0, import_react.useState)("");
+  const [cfBusy, setCfBusy] = (0, import_react.useState)(false);
+  const saveCfMode = async (mode) => {
+    setCfBusy(true);
+    setError(null);
+    try {
+      setStatus(await call(POCKET_ENDPOINTS.cfModeSet, { mode }));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setCfBusy(false);
+    }
+  };
+  const saveCfToken = async () => {
+    const token = (cfTokenInput ?? "").trim();
+    if (!token) return;
+    setCfBusy(true);
+    setError(null);
+    try {
+      setStatus(await call(POCKET_ENDPOINTS.cfTokenSet, { token }));
+      setCfTokenInput("");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setCfBusy(false);
+    }
+  };
+  const clearCfToken = async () => {
+    setCfBusy(true);
+    setError(null);
+    try {
+      setStatus(await call(POCKET_ENDPOINTS.cfTokenClear, {}));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setCfBusy(false);
     }
   };
   const publicHost = publicHostOf(status);
@@ -3303,6 +3375,30 @@ function PocketSettingsTab({ rpcCall, t }) {
         baseError ? (0, import_react.createElement)("div", { style: { color: "var(--dsw-alias-state-error-primary,#dc2626)", fontSize: 12, marginTop: 4 } }, t(baseError)) : null,
         (0, import_react.createElement)("div", { style: { ...styles.muted, marginTop: 4 } }, t("publicBaseHint"))
       ),
+      publicBase ? (0, import_react.createElement)(
+        "div",
+        { style: { marginTop: 8 } },
+        (0, import_react.createElement)("div", { style: { fontSize: 12, fontWeight: 600, color: "var(--dsw-alias-label-secondary,#6b7280)" } }, t("cfModeTitle")),
+        (0, import_react.createElement)(
+          "div",
+          { style: { display: "flex", gap: 8, marginTop: 6 } },
+          (0, import_react.createElement)("button", { style: { ...styles.btn, height: 30, padding: "0 12px", fontSize: 12, fontWeight: cfMode === "cli" ? 600 : 400, background: cfMode === "cli" ? "var(--dsw-alias-button-primary-fill, var(--dsw-alias-brand-primary,#4f6ef7))" : "var(--dsw-alias-bg-layer-1,#fff)", color: cfMode === "cli" ? "var(--dsw-alias-label-primary-foreground, #fff)" : "var(--dsw-alias-label-primary,inherit)" }, onClick: () => saveCfMode("cli"), disabled: cfBusy }, t("cfModeCli")),
+          (0, import_react.createElement)("button", { style: { ...styles.btn, height: 30, padding: "0 12px", fontSize: 12, fontWeight: cfMode === "api" ? 600 : 400, background: cfMode === "api" ? "var(--dsw-alias-button-primary-fill, var(--dsw-alias-brand-primary,#4f6ef7))" : "var(--dsw-alias-bg-layer-1,#fff)", color: cfMode === "api" ? "var(--dsw-alias-label-primary-foreground, #fff)" : "var(--dsw-alias-label-primary,inherit)" }, onClick: () => saveCfMode("api"), disabled: cfBusy }, t("cfModeApi"))
+        ),
+        cfMode === "cli" ? (0, import_react.createElement)("div", { style: { ...styles.muted, marginTop: 4 } }, t("cfModeHintCli")) : cfMode === "api" ? (0, import_react.createElement)(
+          "div",
+          null,
+          (0, import_react.createElement)("div", { style: { ...styles.muted, marginTop: 4 } }, t("cfModeHintApi")),
+          (0, import_react.createElement)(
+            "div",
+            { style: { display: "flex", gap: 8, marginTop: 6 } },
+            (0, import_react.createElement)("input", { style: { flex: 1, font: "inherit", height: 30, padding: "0 10px", fontSize: 12, borderRadius: 8, border: "1px solid var(--dsw-alias-border-l2,#d1d5db)", background: "var(--dsw-alias-bg-layer-1,#fff)", color: "var(--dsw-alias-label-primary,inherit)", outline: "none" }, type: "password", placeholder: cfTokenSet ? t("cfTokenSaved") : t("cfTokenPlaceholder"), value: cfTokenInput, onChange: (e) => setCfTokenInput(e.target.value), spellCheck: false, autoComplete: "off" }),
+            (0, import_react.createElement)("button", { style: { ...styles.btn, height: 30, padding: "0 12px", fontSize: 12 }, onClick: saveCfToken, disabled: cfBusy || !(cfTokenInput ?? "").trim() }, cfTokenSet ? t("cfTokenReplace") : t("cfTokenSave")),
+            cfTokenSet ? (0, import_react.createElement)("button", { style: { ...styles.btn, height: 30, padding: "0 12px", fontSize: 12 }, onClick: clearCfToken, disabled: cfBusy }, t("cfTokenClear")) : null
+          ),
+          cfTokenSet ? (0, import_react.createElement)("div", { style: { ...styles.muted, marginTop: 4 } }, t("cfTokenSavedHint")) : null
+        ) : (0, import_react.createElement)("div", { style: { ...styles.muted, marginTop: 4 } }, t("cfModePickHint"))
+      ) : null,
       tunnelUrl ? (0, import_react.createElement)(
         "div",
         null,
@@ -3320,12 +3416,17 @@ function PocketSettingsTab({ rpcCall, t }) {
           "div",
           { style: { display: "flex", gap: 8, marginTop: 8 } },
           (0, import_react.createElement)("button", { style: styles.btn, onClick: stopTunnel }, t("stopTunnel")),
-          publicBase ? (0, import_react.createElement)("button", { style: styles.btn, onClick: startTunnel, disabled: busy || tunnelStarting }, busy ? t("opening") : t("enableBackup")) : null
-        ) : publicBase ? (0, import_react.createElement)("button", { style: { ...styles.btn, margin: "8px 0" }, onClick: startTunnel, disabled: busy || tunnelStarting }, busy ? t("opening") : t("enableBackup")) : null
+          publicBase ? (0, import_react.createElement)("button", { style: styles.btn, onClick: () => startTunnel(true), disabled: busy || tunnelStarting }, busy ? t("opening") : t("enableBackup")) : null
+        ) : publicBase ? (0, import_react.createElement)(
+          "div",
+          { style: { display: "flex", gap: 8, margin: "8px 0" } },
+          (0, import_react.createElement)("button", { style: styles.primary, onClick: () => startTunnel(), disabled: busy || tunnelStarting }, busy ? t("opening") : t("enableFixed")),
+          (0, import_react.createElement)("button", { style: styles.btn, onClick: () => startTunnel(true), disabled: busy || tunnelStarting }, t("enableBackup"))
+        ) : null
       ) : (0, import_react.createElement)(
         "div",
         null,
-        (0, import_react.createElement)("button", { style: { ...styles.primary, margin: "8px 0" }, onClick: startTunnel, disabled: busy || tunnelStarting }, busy ? t("opening") : t("enable")),
+        (0, import_react.createElement)("button", { style: { ...styles.primary, margin: "8px 0" }, onClick: () => startTunnel(), disabled: busy || tunnelStarting }, busy ? t("opening") : t("enable")),
         tunnelStarting ? (0, import_react.createElement)(
           "div",
           { style: { marginTop: 4, fontSize: 12, color: "var(--dsw-alias-label-secondary,#6b7280)" } },

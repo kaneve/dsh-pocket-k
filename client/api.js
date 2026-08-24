@@ -15,6 +15,9 @@ export const POCKET_ENDPOINTS = Object.freeze({
   publicBaseGet: 'pocket.publicBase.get',
   publicBaseSet: 'pocket.publicBase.set',
   publicBaseClear: 'pocket.publicBase.clear',
+  cfModeSet: 'pocket.cf.mode.set',
+  cfTokenSet: 'pocket.cf.token.set',
+  cfTokenClear: 'pocket.cf.token.clear',
   deviceList: 'device.list',
   deviceRevoke: 'device.revoke',
   deviceRevokeAll: 'device.revokeAll',
@@ -67,6 +70,7 @@ export function redactStatus(s) {
     tunnelUrl: s?.tunnelUrl ?? null,
     tunnelQr: s?.tunnelQr ?? null,
     tunnelState: s?.tunnelState ?? { phase: 'idle' },
+    tunnelMode: s?.tunnelMode ?? null,
     publicBase: s?.publicBase ?? null,
     dshPort: s?.dshPort ?? null,
   };

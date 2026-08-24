@@ -199,27 +199,29 @@ function PocketSettingsTab({ rpcCall, t }) {
   const [disclaimerOpen, setDisclaimerOpen] = useState(false);
   const [disclaimerChecked, setDisclaimerChecked] = useState(false);
 
-  const doStartTunnel = async () => {
+  const doStartTunnel = async (quick = false) => {
     setBusy(true);
     setError(null);
     setTunnelState({ phase: 'starting', detail: '正在开启…', startedAt: Date.now() });
     try {
-      setStatus(await call(POCKET_ENDPOINTS.tunnelStart, { disclaimer: true }));
+      setStatus(await call(POCKET_ENDPOINTS.tunnelStart, { disclaimer: true, ...(quick ? { quick: true } : {}) }));
     } catch (err) {
       setError(err.message);
     } finally {
       setBusy(false);
     }
   };
-  const startTunnel = () => {
+  const [startMode, setStartMode] = useState('fixed'); // 'fixed' | 'quick'：免责弹框后按此模式开启
+  const startTunnel = (quick = false) => {
     // 每次开启都弹免责确认（勾选后才能继续）
+    setStartMode(quick ? 'quick' : 'fixed');
     setDisclaimerChecked(false);
     setDisclaimerOpen(true);
   };
   const confirmDisclaimer = () => {
     if (!disclaimerChecked) return; // 未勾选不允许
     setDisclaimerOpen(false);
-    doStartTunnel();
+    doStartTunnel(startMode === 'quick');
   };
 
   const stopTunnel = async () => {
@@ -308,6 +310,35 @@ function PocketSettingsTab({ rpcCall, t }) {
     catch (err) { setError(err.message); }
     finally { setBusy(false); }
   };
+  // Cloudflare named tunnel 自动配置（CLI login / API Token 双模式）
+  const cfMode = status?.cfMode ?? null;
+  const cfTokenSet = !!status?.cfTokenSet;
+  const [cfTokenInput, setCfTokenInput] = useState('');
+  const [cfBusy, setCfBusy] = useState(false);
+  const saveCfMode = async (mode) => {
+    setCfBusy(true);
+    setError(null);
+    try { setStatus(await call(POCKET_ENDPOINTS.cfModeSet, { mode })); }
+    catch (err) { setError(err.message); }
+    finally { setCfBusy(false); }
+  };
+  const saveCfToken = async () => {
+    const token = (cfTokenInput ?? '').trim();
+    if (!token) return;
+    setCfBusy(true);
+    setError(null);
+    try { setStatus(await call(POCKET_ENDPOINTS.cfTokenSet, { token })); setCfTokenInput(''); }
+    catch (err) { setError(err.message); }
+    finally { setCfBusy(false); }
+  };
+  const clearCfToken = async () => {
+    setCfBusy(true);
+    setError(null);
+    try { setStatus(await call(POCKET_ENDPOINTS.cfTokenClear, {})); }
+    catch (err) { setError(err.message); }
+    finally { setCfBusy(false); }
+  };
+
   const publicHost = publicHostOf(status);
   const baseValue = baseInput ?? publicBase ?? '';
   const baseError = baseInput !== null ? publicBaseError(baseValue) : null;
@@ -487,6 +518,26 @@ function PocketSettingsTab({ rpcCall, t }) {
         baseError ? h('div', { style: { color: 'var(--dsw-alias-state-error-primary,#dc2626)', fontSize: 12, marginTop: 4 } }, t(baseError)) : null,
         h('div', { style: { ...styles.muted, marginTop: 4 } }, t('publicBaseHint')),
       ),
+      publicBase ? h('div', { style: { marginTop: 8 } },
+        h('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--dsw-alias-label-secondary,#6b7280)' } }, t('cfModeTitle')),
+        h('div', { style: { display: 'flex', gap: 8, marginTop: 6 } },
+          h('button', { style: { ...styles.btn, height: 30, padding: '0 12px', fontSize: 12, fontWeight: cfMode === 'cli' ? 600 : 400, background: cfMode === 'cli' ? 'var(--dsw-alias-button-primary-fill, var(--dsw-alias-brand-primary,#4f6ef7))' : 'var(--dsw-alias-bg-layer-1,#fff)', color: cfMode === 'cli' ? 'var(--dsw-alias-label-primary-foreground, #fff)' : 'var(--dsw-alias-label-primary,inherit)' }, onClick: () => saveCfMode('cli'), disabled: cfBusy }, t('cfModeCli')),
+          h('button', { style: { ...styles.btn, height: 30, padding: '0 12px', fontSize: 12, fontWeight: cfMode === 'api' ? 600 : 400, background: cfMode === 'api' ? 'var(--dsw-alias-button-primary-fill, var(--dsw-alias-brand-primary,#4f6ef7))' : 'var(--dsw-alias-bg-layer-1,#fff)', color: cfMode === 'api' ? 'var(--dsw-alias-label-primary-foreground, #fff)' : 'var(--dsw-alias-label-primary,inherit)' }, onClick: () => saveCfMode('api'), disabled: cfBusy }, t('cfModeApi')),
+        ),
+        cfMode === 'cli'
+          ? h('div', { style: { ...styles.muted, marginTop: 4 } }, t('cfModeHintCli'))
+          : cfMode === 'api'
+            ? h('div', null,
+                h('div', { style: { ...styles.muted, marginTop: 4 } }, t('cfModeHintApi')),
+                h('div', { style: { display: 'flex', gap: 8, marginTop: 6 } },
+                  h('input', { style: { flex: 1, font: 'inherit', height: 30, padding: '0 10px', fontSize: 12, borderRadius: 8, border: '1px solid var(--dsw-alias-border-l2,#d1d5db)', background: 'var(--dsw-alias-bg-layer-1,#fff)', color: 'var(--dsw-alias-label-primary,inherit)', outline: 'none' }, type: 'password', placeholder: cfTokenSet ? t('cfTokenSaved') : t('cfTokenPlaceholder'), value: cfTokenInput, onChange: (e) => setCfTokenInput(e.target.value), spellCheck: false, autoComplete: 'off' }),
+                  h('button', { style: { ...styles.btn, height: 30, padding: '0 12px', fontSize: 12 }, onClick: saveCfToken, disabled: cfBusy || !((cfTokenInput ?? '').trim()) }, cfTokenSet ? t('cfTokenReplace') : t('cfTokenSave')),
+                  cfTokenSet ? h('button', { style: { ...styles.btn, height: 30, padding: '0 12px', fontSize: 12 }, onClick: clearCfToken, disabled: cfBusy }, t('cfTokenClear')) : null,
+                ),
+                cfTokenSet ? h('div', { style: { ...styles.muted, marginTop: 4 } }, t('cfTokenSavedHint')) : null,
+              )
+            : h('div', { style: { ...styles.muted, marginTop: 4 } }, t('cfModePickHint')),
+      ) : null,
       tunnelUrl
         ? h('div', null,
           h('img', { src: status.tunnelQr, alt: 'Tunnel QR', style: styles.qr }),
@@ -504,14 +555,17 @@ function PocketSettingsTab({ rpcCall, t }) {
           status.tunnelRunning
             ? h('div', { style: { display: 'flex', gap: 8, marginTop: 8 } },
               h('button', { style: styles.btn, onClick: stopTunnel }, t('stopTunnel')),
-              publicBase ? h('button', { style: styles.btn, onClick: startTunnel, disabled: busy || tunnelStarting }, busy ? t('opening') : t('enableBackup')) : null,
+              publicBase ? h('button', { style: styles.btn, onClick: () => startTunnel(true), disabled: busy || tunnelStarting }, busy ? t('opening') : t('enableBackup')) : null,
             )
             : (publicBase
-              ? h('button', { style: { ...styles.btn, margin: '8px 0' }, onClick: startTunnel, disabled: busy || tunnelStarting }, busy ? t('opening') : t('enableBackup'))
+              ? h('div', { style: { display: 'flex', gap: 8, margin: '8px 0' } },
+                  h('button', { style: styles.primary, onClick: () => startTunnel(), disabled: busy || tunnelStarting }, busy ? t('opening') : t('enableFixed')),
+                  h('button', { style: styles.btn, onClick: () => startTunnel(true), disabled: busy || tunnelStarting }, t('enableBackup')),
+                )
               : null),
         )
         : h('div', null,
-          h('button', { style: { ...styles.primary, margin: '8px 0' }, onClick: startTunnel, disabled: busy || tunnelStarting }, busy ? t('opening') : t('enable')),
+          h('button', { style: { ...styles.primary, margin: '8px 0' }, onClick: () => startTunnel(), disabled: busy || tunnelStarting }, busy ? t('opening') : t('enable')),
           tunnelStarting
             ? h('div', { style: { marginTop: 4, fontSize: 12, color: 'var(--dsw-alias-label-secondary,#6b7280)' } },
               tunnelPhase === 'downloading'

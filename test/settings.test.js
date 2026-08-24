@@ -137,3 +137,31 @@ test('publicBaseUrl：未配置 → null；脏数据 → warn 回落 null；set/
     console.warn = origWarn;
   }
 }));
+
+test('cfMode：默认 null；set cli/api 持久化；非法值拒绝；clear 清除', () => withHome(async () => {
+  const { cfMode, setCfMode, clearCfMode, settingsPath } = await import('../lib/settings.mjs');
+  assert.equal(cfMode(), null, '未配置');
+  assert.equal(setCfMode('cli'), 'cli');
+  assert.equal(cfMode(), 'cli');
+  assert.equal(setCfMode('api'), 'api');
+  assert.equal(cfMode(), 'api');
+  assert.throws(() => setCfMode('foo'), /cli 或 api/, '非法模式拒绝');
+  assert.equal(cfMode(), 'api', '拒绝后原值不变');
+  assert.equal(clearCfMode(), null);
+  assert.equal(cfMode(), null);
+  assert.equal(JSON.parse(readFileSync(settingsPath(), 'utf8')).cfMode, undefined, '清除后文件无此键');
+}));
+
+test('cfApiToken：默认 null；set 持久化不校验格式；clear 清除；空值清除', () => withHome(async () => {
+  const { cfApiToken, setCfApiToken, clearCfApiToken, settingsPath } = await import('../lib/settings.mjs');
+  assert.equal(cfApiToken(), null);
+  assert.equal(setCfApiToken('sk-abc-123'), true);
+  assert.equal(cfApiToken(), 'sk-abc-123');
+  assert.equal(JSON.parse(readFileSync(settingsPath(), 'utf8')).cfApiToken, 'sk-abc-123', '已持久化');
+  assert.equal(setCfApiToken('  '), false, '空白视为清除');
+  assert.equal(cfApiToken(), null);
+  setCfApiToken('tok');
+  assert.equal(clearCfApiToken(), false);
+  assert.equal(cfApiToken(), null);
+  assert.equal(JSON.parse(readFileSync(settingsPath(), 'utf8')).cfApiToken, undefined, '清除后文件无此键');
+}));
