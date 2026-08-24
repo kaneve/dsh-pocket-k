@@ -3149,8 +3149,7 @@ function PocketSettingsTab({ rpcCall, t }) {
     setBusy(true);
     setError(null);
     try {
-      if (status?.tunnelMode === "fixed") await call(POCKET_ENDPOINTS.tunnelStop, {});
-      setStatus(await call(POCKET_ENDPOINTS.publicBaseClear, {}));
+      setStatus(await call(POCKET_ENDPOINTS.tunnelStop, {}));
     } catch (err) {
       setError(err.message);
     } finally {
@@ -3442,7 +3441,13 @@ function PocketSettingsTab({ rpcCall, t }) {
       ) : (0, import_react.createElement)(
         "div",
         null,
-        (0, import_react.createElement)("button", { style: { ...styles.primary, margin: "8px 0" }, onClick: () => startTunnel(), disabled: busy || tunnelStarting }, busy ? t("opening") : t("enable")),
+        publicBase ? (0, import_react.createElement)(
+          "div",
+          { style: { display: "flex", gap: 8, margin: "8px 0" } },
+          (0, import_react.createElement)("button", { style: styles.primary, onClick: () => startTunnel(), disabled: busy || tunnelStarting }, busy ? t("opening") : t("enableFixed")),
+          (0, import_react.createElement)("button", { style: styles.btn, onClick: () => startTunnel(true), disabled: busy || tunnelStarting }, t("enableBackup")),
+          (0, import_react.createElement)("button", { style: styles.btn, onClick: disableFixedDomain, disabled: busy }, t("close"))
+        ) : (0, import_react.createElement)("button", { style: { ...styles.primary, margin: "8px 0" }, onClick: () => startTunnel(), disabled: busy || tunnelStarting }, busy ? t("opening") : t("enable")),
         tunnelStarting ? (0, import_react.createElement)(
           "div",
           { style: { marginTop: 4, fontSize: 12, color: "var(--dsw-alias-label-secondary,#6b7280)" } },

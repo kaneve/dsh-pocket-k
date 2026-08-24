@@ -314,9 +314,8 @@ function PocketSettingsTab({ rpcCall, t }) {
     setBusy(true);
     setError(null);
     try {
-      // 固定隧道正在跑 → 先停掉，避免清除后还残留一个指向已删固定域名的隧道进程
-      if (status?.tunnelMode === 'fixed') await call(POCKET_ENDPOINTS.tunnelStop, {});
-      setStatus(await call(POCKET_ENDPOINTS.publicBaseClear, {}));
+      // 「关闭」只停掉当前隧道：保留固定域名配置（不用重填），也不自动切到快速/做其他动作
+      setStatus(await call(POCKET_ENDPOINTS.tunnelStop, {}));
     } catch (err) { setError(err.message); }
     finally { setBusy(false); }
   };
@@ -577,7 +576,13 @@ function PocketSettingsTab({ rpcCall, t }) {
               : null),
         )
         : h('div', null,
-          h('button', { style: { ...styles.primary, margin: '8px 0' }, onClick: () => startTunnel(), disabled: busy || tunnelStarting }, busy ? t('opening') : t('enable')),
+          publicBase
+            ? h('div', { style: { display: 'flex', gap: 8, margin: '8px 0' } },
+                h('button', { style: styles.primary, onClick: () => startTunnel(), disabled: busy || tunnelStarting }, busy ? t('opening') : t('enableFixed')),
+                h('button', { style: styles.btn, onClick: () => startTunnel(true), disabled: busy || tunnelStarting }, t('enableBackup')),
+                h('button', { style: styles.btn, onClick: disableFixedDomain, disabled: busy }, t('close')),
+              )
+            : h('button', { style: { ...styles.primary, margin: '8px 0' }, onClick: () => startTunnel(), disabled: busy || tunnelStarting }, busy ? t('opening') : t('enable')),
           tunnelStarting
             ? h('div', { style: { marginTop: 4, fontSize: 12, color: 'var(--dsw-alias-label-secondary,#6b7280)' } },
               tunnelPhase === 'downloading'

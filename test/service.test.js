@@ -742,7 +742,7 @@ Ethernet adapter WLAN:
   assert.equal(detectWsl(), false, '非 WSL 环境返回 false（macOS 无 /proc/version microsoft 标记）');
 });
 
-test('公网固定地址：status.publicBase 生效——二维码/URL 改用固定 origin（快速隧道没跑也有码）', async () => {
+test('公网固定地址：配置保留但未运行时 URL/二维码为 null；named 运行时才显示固定 origin', async () => {
   const qrTexts = [];
   const internals = {
     encodeQr: async (text) => {
@@ -755,16 +755,49 @@ test('公网固定地址：status.publicBase 生效——二维码/URL 改用固
     getPublicBaseUrl: () => 'https://dsh.example.com',
   });
   const s = await service.status();
-  assert.equal(s.publicBase, 'https://dsh.example.com');
-  assert.equal(s.tunnelUrl, 'https://dsh.example.com', '公网 URL 优先用固定 origin');
-  assert.equal(s.tunnelRunning, false, '快速隧道未跑');
-  assert.ok(s.tunnelQr?.startsWith('data:image/png;base64,'), '固定模式下也生成二维码');
-  assert.ok(qrTexts.includes('https://dsh.example.com'), '二维码内容是固定 origin');
-  // 未注入 getter → 与旧行为一致（publicBase=null、无隧道时 URL=null）
+  assert.equal(s.publicBase, 'https://dsh.example.com', '固定域名配置保留');
+  assert.equal(s.tunnelUrl, null, '未运行时公网 URL 不显示');
+  assert.equal(s.tunnelRunning, false);
+  assert.equal(s.tunnelQr, null, '未运行时二维码不显示');
+  assert.ok(!qrTexts.includes('https://dsh.example.com'), '未运行时不会生成固定域名二维码');
+  // 未注入 getter → publicBase=null、无隧道时 URL=null
   const legacy = await createPocketService({ dshPort: 3080, port: 3082, internals }).status();
   assert.equal(legacy.publicBase, null);
   assert.equal(legacy.tunnelUrl, null);
   assert.equal(legacy.tunnelQr, null);
+});
+test('公网固定地址：named 隧道运行后 URL/二维码显示固定 origin，停止后回到 null', async () => {
+  const qrTexts = [];
+  const internals = {
+    encodeQr: async (text) => {
+      qrTexts.push(text);
+      return `data:image/png;base64,${Buffer.from(text).toString('base64')}`;
+    },
+    startNamedTunnel: async (opts) => ({ url: opts.base, kill: () => {} }),
+  };
+  const service = createPocketService({
+    dshPort: 3080, port: 3081, internals,
+    getPublicBaseUrl: () => 'https://dsh.example.com',
+    getCfMode: () => 'api',
+    getCfApiToken: () => 'tok',
+  });
+  try {
+    await service.startProxy();
+    await service.startTunnel();
+    let s = await service.status();
+    assert.equal(s.tunnelRunning, true);
+    assert.equal(s.tunnelUrl, 'https://dsh.example.com');
+    assert.ok(s.tunnelQr?.startsWith('data:image/png;base64,'), '运行时生成固定域名二维码');
+    assert.ok(qrTexts.includes('https://dsh.example.com'));
+    service.stopTunnel();
+    s = await service.status();
+    assert.equal(s.tunnelRunning, false);
+    assert.equal(s.tunnelUrl, null, '停止后 URL 消失');
+    assert.equal(s.tunnelQr, null, '停止后二维码消失');
+    assert.equal(s.publicBase, 'https://dsh.example.com', '固定域名配置仍保留，无需重填');
+  } finally {
+    await service.dispose();
+  }
 });
 test('公网固定地址清除后：快速隧道未跑 tunnelUrl=null；跑起来后 tunnelUrl=tunnel.url', async () => {
   const internals = stubInternals();
@@ -783,7 +816,7 @@ test('公网固定地址清除后：快速隧道未跑 tunnelUrl=null；跑起�
 
     publicBase = 'https://dsh.example.com';
     s = await service.status();
-    assert.equal(s.tunnelUrl, 'https://dsh.example.com', '有固定地址 → 固定 origin 优先');
+    assert.equal(s.tunnelUrl, null, '固定地址仅配置，未运行不显示 URL');
     assert.equal(s.tunnelRunning, false, '固定地址不改变快速隧道进程状态');
 
     publicBase = null;
