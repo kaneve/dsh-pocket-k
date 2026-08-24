@@ -3162,17 +3162,6 @@ function PocketSettingsTab({ rpcCall, t }) {
       setBusy(false);
     }
   };
-  const disableFixedDomain = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      setStatus(await call(POCKET_ENDPOINTS.tunnelStop, {}));
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  };
   const cfMode = status?.cfMode ?? null;
   const cfTokenSet = !!status?.cfTokenSet;
   const [cfTokenInput, setCfTokenInput] = (0, import_react.useState)("");
@@ -3392,7 +3381,7 @@ function PocketSettingsTab({ rpcCall, t }) {
         "div",
         { style: { display: "flex", alignItems: "center", gap: 8, fontWeight: 600, fontSize: 13 } },
         t("wanTitle"),
-        publicBase ? (0, import_react.createElement)("span", { style: { display: "inline-block", marginLeft: 8, padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 600, background: "var(--dsw-alias-brand-primary,#4f6ef7)", color: "#fff" } }, t("fixedMode")) : tunnelUrl ? (0, import_react.createElement)("span", { style: { display: "inline-block", marginLeft: 8, padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 600, background: "var(--dsw-alias-state-warn-primary,#b45309)", color: "#fff" } }, t("randomMode")) : null
+        status?.tunnelMode === "fixed" ? (0, import_react.createElement)("span", { style: { display: "inline-block", marginLeft: 8, padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 600, background: "var(--dsw-alias-brand-primary,#4f6ef7)", color: "#fff" } }, t("fixedMode")) : status?.tunnelMode === "quick" ? (0, import_react.createElement)("span", { style: { display: "inline-block", marginLeft: 8, padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 600, background: "var(--dsw-alias-state-warn-primary,#b45309)", color: "#fff" } }, t("randomMode")) : publicBase ? (0, import_react.createElement)("span", { style: { display: "inline-block", marginLeft: 8, padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 600, background: "var(--dsw-alias-brand-primary,#4f6ef7)", color: "#fff" } }, t("fixedMode")) : null
       ),
       // 公网固定地址（named tunnel）：保存后公网二维码改用此地址，登录状态跨重启保持
       (0, import_react.createElement)(
@@ -3456,29 +3445,25 @@ function PocketSettingsTab({ rpcCall, t }) {
           customBtn("public"),
           status?.publicPinCustom ? (0, import_react.createElement)("div", { style: { marginTop: 2, fontSize: 11, color: "var(--dsw-alias-state-warn-primary,#b45309)" } }, t("pinCustomHint")) : null
         ) : null,
-        status.tunnelRunning ? (0, import_react.createElement)(
-          "div",
-          { style: { display: "flex", gap: 8, marginTop: 8 } },
-          (0, import_react.createElement)("button", { style: styles.primary, onClick: stopTunnel }, t("stopTunnel")),
-          publicBase ? (0, import_react.createElement)("button", { style: styles.btn, onClick: () => startTunnel(true), disabled: busy || tunnelStarting }, busy ? t("opening") : t("enableBackup")) : null,
-          publicBase ? (0, import_react.createElement)("button", { style: styles.btn, onClick: disableFixedDomain, disabled: busy }, t("close")) : null
-        ) : publicBase ? (0, import_react.createElement)(
+        (0, import_react.createElement)(
           "div",
           { style: { display: "flex", gap: 8, margin: "8px 0" } },
-          (0, import_react.createElement)("button", { style: styles.btn, onClick: () => startTunnel(), disabled: busy || tunnelStarting }, busy ? t("opening") : t("enableFixed")),
-          (0, import_react.createElement)("button", { style: styles.btn, onClick: () => startTunnel(true), disabled: busy || tunnelStarting }, t("enableBackup")),
-          (0, import_react.createElement)("button", { style: styles.primary, onClick: disableFixedDomain, disabled: busy }, t("close"))
-        ) : null
+          publicBase ? [
+            (0, import_react.createElement)("button", { style: status?.tunnelMode === "fixed" ? styles.primary : styles.btn, onClick: status?.tunnelMode === "fixed" ? stopTunnel : () => startTunnel(), disabled: busy || tunnelStarting }, status?.tunnelMode === "fixed" ? t("close") : busy ? t("opening") : t("enableFixed")),
+            (0, import_react.createElement)("button", { style: status?.tunnelMode === "quick" ? styles.primary : styles.btn, onClick: status?.tunnelMode === "quick" ? stopTunnel : () => startTunnel(true), disabled: busy || tunnelStarting }, status?.tunnelMode === "quick" ? t("close") : busy ? t("opening") : t("enableBackup"))
+          ] : (0, import_react.createElement)("button", { style: { ...status?.tunnelMode === "quick" ? styles.primary : styles.btn }, onClick: status?.tunnelMode === "quick" ? stopTunnel : () => startTunnel(), disabled: busy || tunnelStarting }, status?.tunnelMode === "quick" ? t("close") : busy ? t("opening") : t("enable"))
+        )
       ) : (0, import_react.createElement)(
         "div",
         null,
-        publicBase ? (0, import_react.createElement)(
+        (0, import_react.createElement)(
           "div",
           { style: { display: "flex", gap: 8, margin: "8px 0" } },
-          (0, import_react.createElement)("button", { style: styles.btn, onClick: () => startTunnel(), disabled: busy || tunnelStarting }, busy ? t("opening") : t("enableFixed")),
-          (0, import_react.createElement)("button", { style: styles.btn, onClick: () => startTunnel(true), disabled: busy || tunnelStarting }, t("enableBackup")),
-          (0, import_react.createElement)("button", { style: styles.primary, onClick: disableFixedDomain, disabled: busy }, t("close"))
-        ) : (0, import_react.createElement)("button", { style: { ...styles.primary, margin: "8px 0" }, onClick: () => startTunnel(), disabled: busy || tunnelStarting }, busy ? t("opening") : t("enable")),
+          publicBase ? [
+            (0, import_react.createElement)("button", { style: status?.tunnelMode === "fixed" ? styles.primary : styles.btn, onClick: status?.tunnelMode === "fixed" ? stopTunnel : () => startTunnel(), disabled: busy || tunnelStarting }, status?.tunnelMode === "fixed" ? t("close") : busy ? t("opening") : t("enableFixed")),
+            (0, import_react.createElement)("button", { style: status?.tunnelMode === "quick" ? styles.primary : styles.btn, onClick: status?.tunnelMode === "quick" ? stopTunnel : () => startTunnel(true), disabled: busy || tunnelStarting }, status?.tunnelMode === "quick" ? t("close") : busy ? t("opening") : t("enableBackup"))
+          ] : (0, import_react.createElement)("button", { style: { ...status?.tunnelMode === "quick" ? styles.primary : styles.btn }, onClick: status?.tunnelMode === "quick" ? stopTunnel : () => startTunnel(), disabled: busy || tunnelStarting }, status?.tunnelMode === "quick" ? t("close") : busy ? t("opening") : t("enable"))
+        ),
         tunnelStarting ? (0, import_react.createElement)(
           "div",
           { style: { marginTop: 4, fontSize: 12, color: "var(--dsw-alias-label-secondary,#6b7280)" } },
@@ -3514,8 +3499,8 @@ function PocketSettingsTab({ rpcCall, t }) {
               "div",
               { style: { display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 500 } },
               d.name,
-              (0, import_react.createElement)("span", { style: { width: 8, height: 8, borderRadius: 999, background: d.online ? "#16a34a" : "#9ca3af", display: "inline-block" } }),
-              (0, import_react.createElement)("span", { style: { fontSize: 11, fontWeight: 400, color: d.online ? "#16a34a" : "var(--dsw-alias-label-tertiary,#8b93a1)" } }, d.online ? t("deviceOnline") : t("deviceOffline"))
+              (0, import_react.createElement)("span", { style: { width: 8, height: 8, borderRadius: 999, background: d.online && status?.tunnelRunning ? "#16a34a" : "#9ca3af", display: "inline-block" } }),
+              (0, import_react.createElement)("span", { style: { fontSize: 11, fontWeight: 400, color: d.online && status?.tunnelRunning ? "#16a34a" : "var(--dsw-alias-label-tertiary,#8b93a1)" } }, d.online && status?.tunnelRunning ? t("deviceOnline") : t("deviceOffline"))
             ),
             (0, import_react.createElement)("div", { style: { ...styles.muted, marginTop: 2 } }, fmt(t, "deviceMeta", { first: formatTime(d.createdAt), last: formatTime(d.lastSeenAt) }))
           ),

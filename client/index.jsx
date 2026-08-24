@@ -323,15 +323,6 @@ function PocketSettingsTab({ rpcCall, t }) {
     catch (err) { setError(err.message); }
     finally { setBusy(false); }
   };
-  const disableFixedDomain = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      // 「关闭」只停掉当前隧道：保留固定域名配置（不用重填），也不自动切到快速/做其他动作
-      setStatus(await call(POCKET_ENDPOINTS.tunnelStop, {}));
-    } catch (err) { setError(err.message); }
-    finally { setBusy(false); }
-  };
   // Cloudflare named tunnel 自动配置（CLI login / API Token 双模式）
   const cfMode = status?.cfMode ?? null;
   const cfTokenSet = !!status?.cfTokenSet;
@@ -524,11 +515,13 @@ function PocketSettingsTab({ rpcCall, t }) {
     h('div', { style: styles.block },
       h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, fontSize: 13 } },
         t('wanTitle'),
-        publicBase
+        status?.tunnelMode === 'fixed'
           ? h('span', { style: { display: 'inline-block', marginLeft: 8, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: 'var(--dsw-alias-brand-primary,#4f6ef7)', color: '#fff' } }, t('fixedMode'))
-          : tunnelUrl
+          : status?.tunnelMode === 'quick'
             ? h('span', { style: { display: 'inline-block', marginLeft: 8, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: 'var(--dsw-alias-state-warn-primary,#b45309)', color: '#fff' } }, t('randomMode'))
-            : null,
+            : publicBase
+              ? h('span', { style: { display: 'inline-block', marginLeft: 8, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: 'var(--dsw-alias-brand-primary,#4f6ef7)', color: '#fff' } }, t('fixedMode'))
+              : null,
       ),
       
       // 公网固定地址（named tunnel）：保存后公网二维码改用此地址，登录状态跨重启保持
@@ -584,28 +577,24 @@ function PocketSettingsTab({ rpcCall, t }) {
                   status?.publicPinCustom ? h('div', { style: { marginTop: 2, fontSize: 11, color: 'var(--dsw-alias-state-warn-primary,#b45309)' } }, t('pinCustomHint')) : null,
                 ))
             : null,
-          status.tunnelRunning
-            ? h('div', { style: { display: 'flex', gap: 8, marginTop: 8 } },
-              h('button', { style: styles.primary, onClick: stopTunnel }, t('stopTunnel')),
-              publicBase ? h('button', { style: styles.btn, onClick: () => startTunnel(true), disabled: busy || tunnelStarting }, busy ? t('opening') : t('enableBackup')) : null,
-              publicBase ? h('button', { style: styles.btn, onClick: disableFixedDomain, disabled: busy }, t('close')) : null,
-            )
-            : (publicBase
-              ? h('div', { style: { display: 'flex', gap: 8, margin: '8px 0' } },
-                  h('button', { style: styles.btn, onClick: () => startTunnel(), disabled: busy || tunnelStarting }, busy ? t('opening') : t('enableFixed')),
-                  h('button', { style: styles.btn, onClick: () => startTunnel(true), disabled: busy || tunnelStarting }, t('enableBackup')),
-                  h('button', { style: styles.primary, onClick: disableFixedDomain, disabled: busy }, t('close')),
-                )
-              : null),
+          h('div', { style: { display: 'flex', gap: 8, margin: '8px 0' } },
+            publicBase
+              ? [
+                  h('button', { style: status?.tunnelMode === 'fixed' ? styles.primary : styles.btn, onClick: status?.tunnelMode === 'fixed' ? stopTunnel : () => startTunnel(), disabled: busy || tunnelStarting }, status?.tunnelMode === 'fixed' ? t('close') : (busy ? t('opening') : t('enableFixed'))),
+                  h('button', { style: status?.tunnelMode === 'quick' ? styles.primary : styles.btn, onClick: status?.tunnelMode === 'quick' ? stopTunnel : () => startTunnel(true), disabled: busy || tunnelStarting }, status?.tunnelMode === 'quick' ? t('close') : (busy ? t('opening') : t('enableBackup'))),
+                ]
+              : h('button', { style: { ...(status?.tunnelMode === 'quick' ? styles.primary : styles.btn) }, onClick: status?.tunnelMode === 'quick' ? stopTunnel : () => startTunnel(), disabled: busy || tunnelStarting }, status?.tunnelMode === 'quick' ? t('close') : (busy ? t('opening') : t('enable'))),
+          ),
         )
         : h('div', null,
-          publicBase
-            ? h('div', { style: { display: 'flex', gap: 8, margin: '8px 0' } },
-                h('button', { style: styles.btn, onClick: () => startTunnel(), disabled: busy || tunnelStarting }, busy ? t('opening') : t('enableFixed')),
-                h('button', { style: styles.btn, onClick: () => startTunnel(true), disabled: busy || tunnelStarting }, t('enableBackup')),
-                h('button', { style: styles.primary, onClick: disableFixedDomain, disabled: busy }, t('close')),
-              )
-            : h('button', { style: { ...styles.primary, margin: '8px 0' }, onClick: () => startTunnel(), disabled: busy || tunnelStarting }, busy ? t('opening') : t('enable')),
+          h('div', { style: { display: 'flex', gap: 8, margin: '8px 0' } },
+            publicBase
+              ? [
+                  h('button', { style: status?.tunnelMode === 'fixed' ? styles.primary : styles.btn, onClick: status?.tunnelMode === 'fixed' ? stopTunnel : () => startTunnel(), disabled: busy || tunnelStarting }, status?.tunnelMode === 'fixed' ? t('close') : (busy ? t('opening') : t('enableFixed'))),
+                  h('button', { style: status?.tunnelMode === 'quick' ? styles.primary : styles.btn, onClick: status?.tunnelMode === 'quick' ? stopTunnel : () => startTunnel(true), disabled: busy || tunnelStarting }, status?.tunnelMode === 'quick' ? t('close') : (busy ? t('opening') : t('enableBackup'))),
+                ]
+              : h('button', { style: { ...(status?.tunnelMode === 'quick' ? styles.primary : styles.btn) }, onClick: status?.tunnelMode === 'quick' ? stopTunnel : () => startTunnel(), disabled: busy || tunnelStarting }, status?.tunnelMode === 'quick' ? t('close') : (busy ? t('opening') : t('enable'))),
+          ),
           tunnelStarting
             ? h('div', { style: { marginTop: 4, fontSize: 12, color: 'var(--dsw-alias-label-secondary,#6b7280)' } },
               tunnelPhase === 'downloading'
@@ -633,8 +622,8 @@ function PocketSettingsTab({ rpcCall, t }) {
                 h('div', null,
                   h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 500 } },
                     d.name,
-                    h('span', { style: { width: 8, height: 8, borderRadius: 999, background: d.online ? '#16a34a' : '#9ca3af', display: 'inline-block' } }),
-                    h('span', { style: { fontSize: 11, fontWeight: 400, color: d.online ? '#16a34a' : 'var(--dsw-alias-label-tertiary,#8b93a1)' } }, d.online ? t('deviceOnline') : t('deviceOffline')),
+                    h('span', { style: { width: 8, height: 8, borderRadius: 999, background: (d.online && status?.tunnelRunning) ? '#16a34a' : '#9ca3af', display: 'inline-block' } }),
+                    h('span', { style: { fontSize: 11, fontWeight: 400, color: (d.online && status?.tunnelRunning) ? '#16a34a' : 'var(--dsw-alias-label-tertiary,#8b93a1)' } }, (d.online && status?.tunnelRunning) ? t('deviceOnline') : t('deviceOffline')),
                   ),
                   h('div', { style: { ...styles.muted, marginTop: 2 } }, fmt(t, 'deviceMeta', { first: formatTime(d.createdAt), last: formatTime(d.lastSeenAt) })),
                 ),
