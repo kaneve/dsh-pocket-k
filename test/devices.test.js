@@ -27,7 +27,9 @@ async function tempHome() {
 
 test('parseDeviceName：轻量平台解析，不返回完整 UA', () => {
   assert.equal(parseDeviceName('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15'), 'iPhone');
-  assert.equal(parseDeviceName('Mozilla/5.0 (Linux; Android 14; Pixel 8)'), 'Android');
+  assert.equal(parseDeviceName('Mozilla/5.0 (Linux; Android 14; Pixel 8 Build/AP2A.240805.005)'), 'Android · Pixel 8');
+  assert.equal(parseDeviceName('Mozilla/5.0 (Linux; Android 13; SM-S918B Build/TP1A.220624.014)'), 'Android · SM-S918B');
+  assert.equal(parseDeviceName('Mozilla/5.0 (Linux; Android 10; K)'), 'Android');
   assert.equal(parseDeviceName('Mozilla/5.0 (Windows NT 10.0; Win64; x64)'), 'Windows');
   assert.equal(parseDeviceName('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'), 'macOS');
   assert.equal(parseDeviceName('Mozilla/5.0 (X11; Linux x86_64)'), 'Linux');

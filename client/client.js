@@ -3499,6 +3499,7 @@ function PocketSettingsTab({ rpcCall, t }) {
               "div",
               { style: { display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 500 } },
               d.name,
+              (0, import_react.createElement)("span", { style: { fontSize: 11, fontWeight: 400, color: "var(--dsw-alias-label-tertiary,#8b93a1)" } }, `#${d.shortId || d.id.slice(0, 6)}`),
               (0, import_react.createElement)("span", { style: { width: 8, height: 8, borderRadius: 999, background: d.online && status?.tunnelRunning ? "#16a34a" : "#9ca3af", display: "inline-block" } }),
               (0, import_react.createElement)("span", { style: { fontSize: 11, fontWeight: 400, color: d.online && status?.tunnelRunning ? "#16a34a" : "var(--dsw-alias-label-tertiary,#8b93a1)" } }, d.online && status?.tunnelRunning ? t("deviceOnline") : t("deviceOffline"))
             ),
