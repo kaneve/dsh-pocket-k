@@ -15,6 +15,9 @@ export const POCKET_ENDPOINTS = Object.freeze({
   publicBaseGet: 'pocket.publicBase.get',
   publicBaseSet: 'pocket.publicBase.set',
   publicBaseClear: 'pocket.publicBase.clear',
+  deviceList: 'device.list',
+  deviceRevoke: 'device.revoke',
+  deviceRevokeAll: 'device.revokeAll',
 });
 
 /** 语义化版本比较：a > b 返回正数，相等 0，a < b 负数（数字段 + 预发布后缀）。 */
