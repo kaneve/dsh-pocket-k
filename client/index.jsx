@@ -529,10 +529,7 @@ function PocketSettingsTab({ rpcCall, t }) {
         h('div', { style: { ...styles.muted, marginTop: 4 } }, t('publicBaseHint')),
       ),
       publicBase ? h('div', { style: { marginTop: 8 } },
-        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 } },
-          h('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--dsw-alias-label-secondary,#6b7280)' } }, t('cfModeTitle')),
-          h('button', { style: { ...styles.btn, height: 26, padding: '0 10px', fontSize: 12, color: 'var(--dsw-alias-state-error-primary,#dc2626)' }, onClick: disableFixedDomain, disabled: busy }, t('disableFixed')),
-        ),
+        h('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--dsw-alias-label-secondary,#6b7280)' } }, t('cfModeTitle')),
         h('div', { style: { display: 'flex', gap: 8, marginTop: 6 } },
           h('button', { style: { ...styles.btn, height: 30, padding: '0 12px', fontSize: 12, fontWeight: cfMode === 'cli' ? 600 : 400, background: cfMode === 'cli' ? 'var(--dsw-alias-button-primary-fill, var(--dsw-alias-brand-primary,#4f6ef7))' : 'var(--dsw-alias-bg-layer-1,#fff)', color: cfMode === 'cli' ? 'var(--dsw-alias-label-primary-foreground, #fff)' : 'var(--dsw-alias-label-primary,inherit)' }, onClick: () => saveCfMode('cli'), disabled: cfBusy }, t('cfModeCli')),
           h('button', { style: { ...styles.btn, height: 30, padding: '0 12px', fontSize: 12, fontWeight: cfMode === 'api' ? 600 : 400, background: cfMode === 'api' ? 'var(--dsw-alias-button-primary-fill, var(--dsw-alias-brand-primary,#4f6ef7))' : 'var(--dsw-alias-bg-layer-1,#fff)', color: cfMode === 'api' ? 'var(--dsw-alias-label-primary-foreground, #fff)' : 'var(--dsw-alias-label-primary,inherit)' }, onClick: () => saveCfMode('api'), disabled: cfBusy }, t('cfModeApi')),
@@ -569,11 +566,13 @@ function PocketSettingsTab({ rpcCall, t }) {
             ? h('div', { style: { display: 'flex', gap: 8, marginTop: 8 } },
               h('button', { style: styles.btn, onClick: stopTunnel }, t('stopTunnel')),
               publicBase ? h('button', { style: styles.btn, onClick: () => startTunnel(true), disabled: busy || tunnelStarting }, busy ? t('opening') : t('enableBackup')) : null,
+              publicBase ? h('button', { style: styles.btn, onClick: disableFixedDomain, disabled: busy }, t('close')) : null,
             )
             : (publicBase
               ? h('div', { style: { display: 'flex', gap: 8, margin: '8px 0' } },
                   h('button', { style: styles.primary, onClick: () => startTunnel(), disabled: busy || tunnelStarting }, busy ? t('opening') : t('enableFixed')),
                   h('button', { style: styles.btn, onClick: () => startTunnel(true), disabled: busy || tunnelStarting }, t('enableBackup')),
+                  h('button', { style: styles.btn, onClick: disableFixedDomain, disabled: busy }, t('close')),
                 )
               : null),
         )
