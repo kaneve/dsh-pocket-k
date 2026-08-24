@@ -3428,15 +3428,15 @@ function PocketSettingsTab({ rpcCall, t }) {
         status.tunnelRunning ? (0, import_react.createElement)(
           "div",
           { style: { display: "flex", gap: 8, marginTop: 8 } },
-          (0, import_react.createElement)("button", { style: styles.btn, onClick: stopTunnel }, t("stopTunnel")),
+          (0, import_react.createElement)("button", { style: styles.primary, onClick: stopTunnel }, t("stopTunnel")),
           publicBase ? (0, import_react.createElement)("button", { style: styles.btn, onClick: () => startTunnel(true), disabled: busy || tunnelStarting }, busy ? t("opening") : t("enableBackup")) : null,
           publicBase ? (0, import_react.createElement)("button", { style: styles.btn, onClick: disableFixedDomain, disabled: busy }, t("close")) : null
         ) : publicBase ? (0, import_react.createElement)(
           "div",
           { style: { display: "flex", gap: 8, margin: "8px 0" } },
-          (0, import_react.createElement)("button", { style: styles.primary, onClick: () => startTunnel(), disabled: busy || tunnelStarting }, busy ? t("opening") : t("enableFixed")),
+          (0, import_react.createElement)("button", { style: styles.btn, onClick: () => startTunnel(), disabled: busy || tunnelStarting }, busy ? t("opening") : t("enableFixed")),
           (0, import_react.createElement)("button", { style: styles.btn, onClick: () => startTunnel(true), disabled: busy || tunnelStarting }, t("enableBackup")),
-          (0, import_react.createElement)("button", { style: styles.btn, onClick: disableFixedDomain, disabled: busy }, t("close"))
+          (0, import_react.createElement)("button", { style: styles.primary, onClick: disableFixedDomain, disabled: busy }, t("close"))
         ) : null
       ) : (0, import_react.createElement)(
         "div",
@@ -3444,9 +3444,9 @@ function PocketSettingsTab({ rpcCall, t }) {
         publicBase ? (0, import_react.createElement)(
           "div",
           { style: { display: "flex", gap: 8, margin: "8px 0" } },
-          (0, import_react.createElement)("button", { style: styles.primary, onClick: () => startTunnel(), disabled: busy || tunnelStarting }, busy ? t("opening") : t("enableFixed")),
+          (0, import_react.createElement)("button", { style: styles.btn, onClick: () => startTunnel(), disabled: busy || tunnelStarting }, busy ? t("opening") : t("enableFixed")),
           (0, import_react.createElement)("button", { style: styles.btn, onClick: () => startTunnel(true), disabled: busy || tunnelStarting }, t("enableBackup")),
-          (0, import_react.createElement)("button", { style: styles.btn, onClick: disableFixedDomain, disabled: busy }, t("close"))
+          (0, import_react.createElement)("button", { style: styles.primary, onClick: disableFixedDomain, disabled: busy }, t("close"))
         ) : (0, import_react.createElement)("button", { style: { ...styles.primary, margin: "8px 0" }, onClick: () => startTunnel(), disabled: busy || tunnelStarting }, busy ? t("opening") : t("enable")),
         tunnelStarting ? (0, import_react.createElement)(
           "div",

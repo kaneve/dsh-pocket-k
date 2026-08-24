@@ -563,24 +563,24 @@ function PocketSettingsTab({ rpcCall, t }) {
             : null,
           status.tunnelRunning
             ? h('div', { style: { display: 'flex', gap: 8, marginTop: 8 } },
-              h('button', { style: styles.btn, onClick: stopTunnel }, t('stopTunnel')),
+              h('button', { style: styles.primary, onClick: stopTunnel }, t('stopTunnel')),
               publicBase ? h('button', { style: styles.btn, onClick: () => startTunnel(true), disabled: busy || tunnelStarting }, busy ? t('opening') : t('enableBackup')) : null,
               publicBase ? h('button', { style: styles.btn, onClick: disableFixedDomain, disabled: busy }, t('close')) : null,
             )
             : (publicBase
               ? h('div', { style: { display: 'flex', gap: 8, margin: '8px 0' } },
-                  h('button', { style: styles.primary, onClick: () => startTunnel(), disabled: busy || tunnelStarting }, busy ? t('opening') : t('enableFixed')),
+                  h('button', { style: styles.btn, onClick: () => startTunnel(), disabled: busy || tunnelStarting }, busy ? t('opening') : t('enableFixed')),
                   h('button', { style: styles.btn, onClick: () => startTunnel(true), disabled: busy || tunnelStarting }, t('enableBackup')),
-                  h('button', { style: styles.btn, onClick: disableFixedDomain, disabled: busy }, t('close')),
+                  h('button', { style: styles.primary, onClick: disableFixedDomain, disabled: busy }, t('close')),
                 )
               : null),
         )
         : h('div', null,
           publicBase
             ? h('div', { style: { display: 'flex', gap: 8, margin: '8px 0' } },
-                h('button', { style: styles.primary, onClick: () => startTunnel(), disabled: busy || tunnelStarting }, busy ? t('opening') : t('enableFixed')),
+                h('button', { style: styles.btn, onClick: () => startTunnel(), disabled: busy || tunnelStarting }, busy ? t('opening') : t('enableFixed')),
                 h('button', { style: styles.btn, onClick: () => startTunnel(true), disabled: busy || tunnelStarting }, t('enableBackup')),
-                h('button', { style: styles.btn, onClick: disableFixedDomain, disabled: busy }, t('close')),
+                h('button', { style: styles.primary, onClick: disableFixedDomain, disabled: busy }, t('close')),
               )
             : h('button', { style: { ...styles.primary, margin: '8px 0' }, onClick: () => startTunnel(), disabled: busy || tunnelStarting }, busy ? t('opening') : t('enable')),
           tunnelStarting
