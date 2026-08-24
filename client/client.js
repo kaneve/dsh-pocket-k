@@ -3323,8 +3323,7 @@ function PocketSettingsTab({ rpcCall, t }) {
       (0, import_react.createElement)(
         "div",
         { style: { display: "flex", alignItems: "center", gap: 8, fontWeight: 600, fontSize: 13 } },
-        t("lanTitle"),
-        status?.lanEnabled !== false ? (0, import_react.createElement)("button", { style: { ...styles.btn, height: 28, padding: "0 12px", fontSize: 12, marginLeft: "auto" }, onClick: () => setLanAccess(false), disabled: lanBusy }, t("close")) : null
+        t("lanTitle")
       ),
       status?.lanEnabled !== false ? lanUrl ? (0, import_react.createElement)(
         "div",
@@ -3372,6 +3371,11 @@ function PocketSettingsTab({ rpcCall, t }) {
           "div",
           { style: { marginTop: 6, fontSize: 12, color: "var(--dsw-alias-state-warn-primary,#b45309)", lineHeight: 1.5 } },
           t("lanPinOff")
+        ),
+        (0, import_react.createElement)(
+          "div",
+          { style: { marginTop: 10 } },
+          (0, import_react.createElement)("button", { style: { ...styles.btn, height: 28, padding: "0 12px", fontSize: 12 }, onClick: () => setLanAccess(false), disabled: lanBusy }, t("close"))
         )
       ) : (0, import_react.createElement)("div", { style: styles.muted }, t("lanStarting")) : (0, import_react.createElement)(
         "div",

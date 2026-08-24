@@ -468,9 +468,6 @@ function PocketSettingsTab({ rpcCall, t }) {
     h('div', { style: styles.block },
       h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, fontSize: 13 } },
         t('lanTitle'),
-        status?.lanEnabled !== false
-          ? h('button', { style: { ...styles.btn, height: 28, padding: '0 12px', fontSize: 12, marginLeft: 'auto' }, onClick: () => setLanAccess(false), disabled: lanBusy }, t('close'))
-          : null,
       ),
       status?.lanEnabled !== false
         ? (lanUrl
@@ -512,6 +509,9 @@ function PocketSettingsTab({ rpcCall, t }) {
                   ))
               : h('div', { style: { marginTop: 6, fontSize: 12, color: 'var(--dsw-alias-state-warn-primary,#b45309)', lineHeight: 1.5 } },
                 t('lanPinOff')),
+            h('div', { style: { marginTop: 10 } },
+              h('button', { style: { ...styles.btn, height: 28, padding: '0 12px', fontSize: 12 }, onClick: () => setLanAccess(false), disabled: lanBusy }, t('close')),
+            ),
           )
           : h('div', { style: styles.muted }, t('lanStarting')))
         : h('div', { style: { marginTop: 4 } },
