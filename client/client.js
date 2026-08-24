@@ -329,6 +329,89 @@ function createSheetRiseTask() {
 }
 
 // client/mobile/effects/stats-line.ts
+var SEP_SPLIT = /\s*[·．]\s*|(?<![0-9])\.(?![0-9])|(?<!\d)\.(?=\d)/;
+var TTFT_ZH = /^首\s*token\s*平均/;
+var TTFT_EN = /^TTFT\s+avg/i;
+function compactGroup(text, lang) {
+  const trimmed = text.trim();
+  if (trimmed === "") return "";
+  const parts = trimmed.split(SEP_SPLIT).map((part) => part.trim()).filter(Boolean);
+  const zh3 = lang === "zh";
+  if (zh3 ? /[轮步]/.test(trimmed) : /\b(turns|steps)\b/i.test(trimmed)) {
+    if (zh3) return parts.map((part) => part.replace(/\s+/g, "")).join("");
+    return parts.join(" ");
+  }
+  if (zh3 ? /(LLM|工具调用)/.test(trimmed) : /(LLM|Tool call)/i.test(trimmed)) {
+    const mapped = parts.map((part) => {
+      let out = part;
+      if (zh3) out = out.replace(/LLM/, "\u6A21\u578B").replace(/工具调用\s*/, "\u5DE5\u5177");
+      else out = out.replace(/Tool call/i, "Tool");
+      return out.trim();
+    }).filter(Boolean);
+    return mapped.join(" ");
+  }
+  if (zh3 ? /(首\s*token|tok\/s)/.test(trimmed) : /(TTFT|tok\/s)/i.test(trimmed)) {
+    const mapped = parts.filter((part) => !(zh3 ? TTFT_ZH : TTFT_EN).test(part)).map((part) => part.replace(/tok\/s/g, "t/s").trim()).filter(Boolean);
+    return mapped.join(" \xB7 ");
+  }
+  if (zh3 ? /缓存命中/.test(trimmed) : /Cache hit/i.test(trimmed)) {
+    let out = trimmed;
+    if (zh3) out = out.replace(/缓存命中/, "\u7F13\u4E2D");
+    else out = out.replace(/Cache hit/i, "Cache");
+    return out.trim();
+  }
+  if (zh3 ? /(输入|输出|tok)/.test(trimmed) : /(Input|Output|tok)/i.test(trimmed)) {
+    const mapped = parts.map((part) => {
+      let out = part;
+      if (zh3) out = out.replace(/输入\s*/, "\u5165 ").replace(/输出\s*/, "\u51FA");
+      else out = out.replace(/Input/i, "In").replace(/Output/i, "Out");
+      out = out.replace(/\btok\b/g, "t");
+      return out.trim();
+    }).filter(Boolean);
+    return mapped.join(zh3 ? " . " : " \xB7 ");
+  }
+  return trimmed;
+}
+function isStatsGroup(el) {
+  return el.nodeType === 1 && el.tagName === "SPAN" && el.getAttribute("aria-hidden") !== "true";
+}
+function removeStatsGroup(group) {
+  const prev = group.previousSibling;
+  if (prev !== null && prev.nodeType === 3 && /^\s*$/.test(prev.textContent ?? "") && prev.previousSibling !== null && prev.previousSibling.nodeType === 1 && prev.previousSibling.getAttribute("aria-hidden") === "true") {
+    prev.previousSibling.remove();
+    prev.remove();
+    group.remove();
+    return;
+  }
+  const next = group.nextSibling;
+  if (next !== null && next.nodeType === 3 && /^\s*$/.test(next.textContent ?? "") && next.nextSibling !== null && next.nextSibling.nodeType === 1 && next.nextSibling.getAttribute("aria-hidden") === "true") {
+    next.nextSibling.remove();
+    next.remove();
+    group.remove();
+    return;
+  }
+  group.remove();
+}
+function compactStats(stats) {
+  const lang = /[\u4e00-\u9fff]/.test(stats.textContent ?? "") ? "zh" : "en";
+  for (const group of Array.from(stats.children).filter(isStatsGroup)) {
+    const original = group.textContent ?? "";
+    if (original.trim() === "") continue;
+    const compacted = compactGroup(original, lang);
+    if (compacted === "") {
+      removeStatsGroup(group);
+    } else if (compacted !== original) {
+      group.textContent = compacted;
+    }
+  }
+  for (const el of Array.from(stats.children)) {
+    if (el.children.length === 0 && /^TPS\s+\d/.test((el.textContent ?? "").trim())) {
+      const text = el.textContent ?? "";
+      const compacted = text.replace(/tok\/s/g, "t/s");
+      if (compacted !== text) el.textContent = compacted;
+    }
+  }
+}
 function createStatsLineTask() {
   let tpsOrigin = null;
   const moveTps = (stats) => {
@@ -356,6 +439,7 @@ function createStatsLineTask() {
       if (root.querySelector("textarea") !== null) continue;
       root.setAttribute("data-mobile-nav", "stats");
       moveTps(root);
+      compactStats(root);
       return;
     }
   };
@@ -1994,9 +2078,9 @@ var COMPAT_CSS = `@media (max-width: 1023px) {
      The official session-status row (turns / steps / LLM time / TTFT /
      cache) is long. The client marks the exact row with
      [data-mobile-nav="stats"] (text-anchored, hashed classes can't be
-     targeted). Layout: ONE fixed-height (28px) flex strip that scrolls
+     targeted). Layout: ONE fixed-height (26px) flex strip that scrolls
      horizontally \u2014 the full metrics stream stays reachable by swiping,
-     the row never grows vertically, no ellipsis or fade, 12px gaps
+     the row never grows vertically, no ellipsis or fade, 8px gaps
      between metric groups, a 2px scrollbar as the swipe affordance. */
 
   [data-mobile-nav="stats"] {
@@ -2006,9 +2090,9 @@ var COMPAT_CSS = `@media (max-width: 1023px) {
     width: 100% !important;
     max-width: 100% !important;
     min-width: 0 !important;
-    height: 28px !important;
-    min-height: 28px !important;
-    max-height: 28px !important;
+    height: 26px !important;
+    min-height: 26px !important;
+    max-height: 26px !important;
     box-sizing: border-box !important;
     white-space: nowrap !important;
     overflow-x: auto !important;
@@ -2017,9 +2101,9 @@ var COMPAT_CSS = `@media (max-width: 1023px) {
     overscroll-behavior-x: contain;
     scrollbar-width: thin !important;
     scrollbar-color: var(--dsw-alias-border-l1, rgba(0, 0, 0, .28)) transparent !important;
-    padding: 0 0 4px !important;
-    line-height: 20px !important;
-    font-size: 12px !important;
+    padding: 0 0 2px !important;
+    line-height: 18px !important;
+    font-size: 11px !important;
   }
   [data-mobile-nav="stats"]::-webkit-scrollbar {
     height: 2px !important;
@@ -2040,7 +2124,7 @@ var COMPAT_CSS = `@media (max-width: 1023px) {
     min-width: max-content !important;
     max-width: none !important;
     white-space: nowrap !important;
-    margin-right: 12px !important;
+    margin-right: 8px !important;
     padding: 0 !important;
   }
   [data-mobile-nav="stats"] > *:last-child {

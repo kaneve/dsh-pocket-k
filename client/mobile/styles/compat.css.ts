@@ -435,9 +435,9 @@ export const COMPAT_CSS = `@media (max-width: 1023px) {
      The official session-status row (turns / steps / LLM time / TTFT /
      cache) is long. The client marks the exact row with
      [data-mobile-nav="stats"] (text-anchored, hashed classes can't be
-     targeted). Layout: ONE fixed-height (28px) flex strip that scrolls
+     targeted). Layout: ONE fixed-height (26px) flex strip that scrolls
      horizontally — the full metrics stream stays reachable by swiping,
-     the row never grows vertically, no ellipsis or fade, 12px gaps
+     the row never grows vertically, no ellipsis or fade, 8px gaps
      between metric groups, a 2px scrollbar as the swipe affordance. */
 
   [data-mobile-nav="stats"] {
@@ -447,9 +447,9 @@ export const COMPAT_CSS = `@media (max-width: 1023px) {
     width: 100% !important;
     max-width: 100% !important;
     min-width: 0 !important;
-    height: 28px !important;
-    min-height: 28px !important;
-    max-height: 28px !important;
+    height: 26px !important;
+    min-height: 26px !important;
+    max-height: 26px !important;
     box-sizing: border-box !important;
     white-space: nowrap !important;
     overflow-x: auto !important;
@@ -458,9 +458,9 @@ export const COMPAT_CSS = `@media (max-width: 1023px) {
     overscroll-behavior-x: contain;
     scrollbar-width: thin !important;
     scrollbar-color: var(--dsw-alias-border-l1, rgba(0, 0, 0, .28)) transparent !important;
-    padding: 0 0 4px !important;
-    line-height: 20px !important;
-    font-size: 12px !important;
+    padding: 0 0 2px !important;
+    line-height: 18px !important;
+    font-size: 11px !important;
   }
   [data-mobile-nav="stats"]::-webkit-scrollbar {
     height: 2px !important;
@@ -481,7 +481,7 @@ export const COMPAT_CSS = `@media (max-width: 1023px) {
     min-width: max-content !important;
     max-width: none !important;
     white-space: nowrap !important;
-    margin-right: 12px !important;
+    margin-right: 8px !important;
     padding: 0 !important;
   }
   [data-mobile-nav="stats"] > *:last-child {
