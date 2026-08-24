@@ -310,6 +310,16 @@ function PocketSettingsTab({ rpcCall, t }) {
     catch (err) { setError(err.message); }
     finally { setBusy(false); }
   };
+  const disableFixedDomain = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      // 固定隧道正在跑 → 先停掉，避免清除后还残留一个指向已删固定域名的隧道进程
+      if (status?.tunnelMode === 'fixed') await call(POCKET_ENDPOINTS.tunnelStop, {});
+      setStatus(await call(POCKET_ENDPOINTS.publicBaseClear, {}));
+    } catch (err) { setError(err.message); }
+    finally { setBusy(false); }
+  };
   // Cloudflare named tunnel 自动配置（CLI login / API Token 双模式）
   const cfMode = status?.cfMode ?? null;
   const cfTokenSet = !!status?.cfTokenSet;
@@ -519,7 +529,10 @@ function PocketSettingsTab({ rpcCall, t }) {
         h('div', { style: { ...styles.muted, marginTop: 4 } }, t('publicBaseHint')),
       ),
       publicBase ? h('div', { style: { marginTop: 8 } },
-        h('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--dsw-alias-label-secondary,#6b7280)' } }, t('cfModeTitle')),
+        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 } },
+          h('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--dsw-alias-label-secondary,#6b7280)' } }, t('cfModeTitle')),
+          h('button', { style: { ...styles.btn, height: 26, padding: '0 10px', fontSize: 12, color: 'var(--dsw-alias-state-error-primary,#dc2626)' }, onClick: disableFixedDomain, disabled: busy }, t('disableFixed')),
+        ),
         h('div', { style: { display: 'flex', gap: 8, marginTop: 6 } },
           h('button', { style: { ...styles.btn, height: 30, padding: '0 12px', fontSize: 12, fontWeight: cfMode === 'cli' ? 600 : 400, background: cfMode === 'cli' ? 'var(--dsw-alias-button-primary-fill, var(--dsw-alias-brand-primary,#4f6ef7))' : 'var(--dsw-alias-bg-layer-1,#fff)', color: cfMode === 'cli' ? 'var(--dsw-alias-label-primary-foreground, #fff)' : 'var(--dsw-alias-label-primary,inherit)' }, onClick: () => saveCfMode('cli'), disabled: cfBusy }, t('cfModeCli')),
           h('button', { style: { ...styles.btn, height: 30, padding: '0 12px', fontSize: 12, fontWeight: cfMode === 'api' ? 600 : 400, background: cfMode === 'api' ? 'var(--dsw-alias-button-primary-fill, var(--dsw-alias-brand-primary,#4f6ef7))' : 'var(--dsw-alias-bg-layer-1,#fff)', color: cfMode === 'api' ? 'var(--dsw-alias-label-primary-foreground, #fff)' : 'var(--dsw-alias-label-primary,inherit)' }, onClick: () => saveCfMode('api'), disabled: cfBusy }, t('cfModeApi')),

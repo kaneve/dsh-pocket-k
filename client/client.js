@@ -2725,6 +2725,7 @@ var zh2 = {
   "cfTokenClear": "\u6E05\u9664",
   "cfTokenSavedHint": "Token \u5DF2\u4FDD\u5B58\uFF0C\u4EC5\u5B58\u672C\u673A settings.json\uFF080600\uFF09\uFF0C\u4E0D\u4F1A\u56DE\u663E\u5230\u9875\u9762\u3002",
   "enableFixed": "\u5F00\u542F\u56FA\u5B9A\u57DF\u540D\u516C\u7F51",
+  "disableFixed": "\u5173\u95ED\u56FA\u5B9A\u57DF\u540D\uFF08\u5207\u56DE\u5FEB\u901F\uFF09",
   "publicBaseErrMissing": "\u8BF7\u8F93\u5165 https:// \u5730\u5740",
   "publicBaseErrUrl": "\u4E0D\u662F\u5408\u6CD5\u7684 URL",
   "publicBaseErrProtocol": "\u4EC5\u652F\u6301 https://",
@@ -2825,6 +2826,7 @@ var en2 = {
   "cfTokenClear": "Clear",
   "cfTokenSavedHint": "Token is stored only in local settings.json (0600) and is never echoed on this page.",
   "enableFixed": "Enable fixed-domain",
+  "disableFixed": "Disable fixed domain (back to quick)",
   "publicBaseErrMissing": "Enter an https:// address",
   "publicBaseErrUrl": "Not a valid URL",
   "publicBaseErrProtocol": "Only https:// is supported",
@@ -3143,6 +3145,18 @@ function PocketSettingsTab({ rpcCall, t }) {
       setBusy(false);
     }
   };
+  const disableFixedDomain = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      if (status?.tunnelMode === "fixed") await call(POCKET_ENDPOINTS.tunnelStop, {});
+      setStatus(await call(POCKET_ENDPOINTS.publicBaseClear, {}));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
   const cfMode = status?.cfMode ?? null;
   const cfTokenSet = !!status?.cfTokenSet;
   const [cfTokenInput, setCfTokenInput] = (0, import_react.useState)("");
@@ -3378,7 +3392,12 @@ function PocketSettingsTab({ rpcCall, t }) {
       publicBase ? (0, import_react.createElement)(
         "div",
         { style: { marginTop: 8 } },
-        (0, import_react.createElement)("div", { style: { fontSize: 12, fontWeight: 600, color: "var(--dsw-alias-label-secondary,#6b7280)" } }, t("cfModeTitle")),
+        (0, import_react.createElement)(
+          "div",
+          { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 } },
+          (0, import_react.createElement)("div", { style: { fontSize: 12, fontWeight: 600, color: "var(--dsw-alias-label-secondary,#6b7280)" } }, t("cfModeTitle")),
+          (0, import_react.createElement)("button", { style: { ...styles.btn, height: 26, padding: "0 10px", fontSize: 12, color: "var(--dsw-alias-state-error-primary,#dc2626)" }, onClick: disableFixedDomain, disabled: busy }, t("disableFixed"))
+        ),
         (0, import_react.createElement)(
           "div",
           { style: { display: "flex", gap: 8, marginTop: 6 } },
