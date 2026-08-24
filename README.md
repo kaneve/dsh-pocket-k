@@ -18,7 +18,7 @@
 > 把 **DeepSeek Harness 装进你的口袋**：一个包、一个设置页，手机扫二维码就实时看到电脑上的同一个界面——人在外面也能用。
 
 <p align="center">
-  内部版本 v1.13.4-k1（基于上游 shaobeichen/dsh-pocket v1.13.4）
+  内部版本 v1.13.4-k1（上游 shaobeichen/dsh-pocket；设置页每次启动时会检查 [GitHub Releases](https://github.com/shaobeichen/dsh-pocket/releases) 最新版并显示）
 </p>
 
 ## 这是什么

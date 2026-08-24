@@ -2664,7 +2664,7 @@ var zh2 = {
   "title": "\u{1F4F1} \u624B\u673A\u8BBF\u95EE",
   "subtitle": "\u624B\u673A\u626B\u7801\u6253\u5F00\u7684\u5C31\u662F\u7535\u8111\u4E0A\u7684\u8FD9\u4E2A\u754C\u9762\uFF0C\u5B9E\u65F6\u540C\u6B65",
   "developer": "\u5F00\u53D1\u8005\uFF1A\u7A0B\u5E8F\u5458\u5C11\u5317\u6668 \xB7 kaneve",
-  "internalBuild": "\u5185\u90E8\u7248\u672C v1.13.4-k1\uFF08\u4E0A\u6E38 v1.13.4\uFF09",
+  "internalBuild": "\u5185\u90E8\u7248\u672C v1.13.4-k1\uFF08\u4E0A\u6E38 {upstream}\uFF09",
   "restarted": "\u{1F504} \u5DF2\u91CD\u542F",
   "ok": "\u77E5\u9053\u4E86",
   "bgHint": "\u8FDB\u7A0B\u5728\u540E\u53F0\u8FD0\u884C\uFF08\u4E0D\u6302\u7EC8\u7AEF\uFF09\u3002\u5982\u9700\u505C\u6B62\uFF1A{cmd}",
@@ -2765,7 +2765,7 @@ var en2 = {
   "title": "\u{1F4F1} Phone access",
   "subtitle": "The phone shows this exact screen, live",
   "developer": "Developer: \u5C11\u5317\u6668 (shaobeichen) \xB7 kaneve",
-  "internalBuild": "Internal build v1.13.4-k1 (upstream v1.13.4)",
+  "internalBuild": "Internal build v1.13.4-k1 (upstream {upstream})",
   "restarted": "\u{1F504} Restarted",
   "ok": "Got it",
   "bgHint": "Running in the background (not attached to a terminal). To stop: {cmd}",
@@ -3262,7 +3262,7 @@ function PocketSettingsTab({ rpcCall, t }) {
         "div",
         { style: { fontSize: 12, color: "var(--dsw-alias-label-tertiary,#8b93a1)", textAlign: "right" } },
         (0, import_react.createElement)("div", { style: { whiteSpace: "nowrap" } }, t("developer")),
-        (0, import_react.createElement)("div", { style: { whiteSpace: "nowrap" } }, t("internalBuild"))
+        (0, import_react.createElement)("div", { style: { whiteSpace: "nowrap" } }, fmt(t, "internalBuild", { upstream: status?.upstreamLatest || "v1.13.4" }))
       )
     ),
     // 桌面端不显示更新/重启横幅（更新由 DSH Desktop 管理），也不需要额外提示

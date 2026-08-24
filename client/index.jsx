@@ -408,7 +408,7 @@ function PocketSettingsTab({ rpcCall, t }) {
       ),
       h('div', { style: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary,#8b93a1)', textAlign: 'right' } },
         h('div', { style: { whiteSpace: 'nowrap' } }, t('developer')),
-        h('div', { style: { whiteSpace: 'nowrap' } }, t('internalBuild')),
+        h('div', { style: { whiteSpace: 'nowrap' } }, fmt(t, 'internalBuild', { upstream: status?.upstreamLatest || 'v1.13.4' })),
       ),
     ),
 
