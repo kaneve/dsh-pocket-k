@@ -3,6 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, request as httpRequest } from 'node:http';
+import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -229,4 +230,138 @@ test('RPC：device.list / device.revoke / device.revokeAll（仅 loopback handle
     await registry.dispose();
     await rm(home, { recursive: true, force: true });
   }
+});
+test('devices registry：50 台/host 上限 LRU；30 天无活动 host GC', async () => {
+  const home = await tempHome();
+  const ttlMs = 200;
+  try {
+    // 先写一个「lastSeenAt 很旧但 createdAt 很新」的 host，专测 host 整体 GC
+    const devicesFile = join(home, 'dsh-pocket', 'devices.json');
+    mkdirSync(join(home, 'dsh-pocket'), { recursive: true });
+    const now = Date.now();
+    writeFileSync(devicesFile, JSON.stringify({
+      'old-host': {
+        staleId: { id: 'staleId', name: 'Old', ua: '', createdAt: now, lastSeenAt: now - ttlMs * 2 },
+      },
+      'fresh-host': {
+        freshId: { id: 'freshId', name: 'Fresh', ua: '', createdAt: now, lastSeenAt: now },
+      },
+    }), 'utf8');
+
+    const reg = createDeviceRegistry({ home, maxDevices: 1000, maxPerHost: 50, ttlMs, flushMs: 60_000 });
+    try {
+      // 50 台/host 上限：第 51 台挤掉最旧
+      const tokens = [];
+      for (let i = 0; i < 50; i++) tokens.push(reg.issue('host-a', `UA-${i}`).token);
+      assert.equal(reg.list('host-a').length, 50, '前 50 台都在');
+      const overflow = reg.issue('host-a', 'UA-overflow').token;
+      assert.equal(reg.list('host-a').length, 50, '超限后仍为 50');
+      assert.equal(reg.check('host-a', tokens[0]), false, '最旧设备被 LRU 逐出');
+      assert.equal(reg.check('host-a', overflow), true, '新设备保留');
+
+      // 触发 runGc：old-host 整体移除，fresh-host 保留
+      reg.issue('new-host', 'New');
+      assert.equal(reg.list('old-host').length, 0, '超过 30 天（测试用 200ms）无活动 host 被 GC');
+      assert.equal(reg.list('fresh-host').length, 1, '有活动 host 保留');
+      assert.equal(reg.list('new-host').length, 1);
+    } finally {
+      await reg.dispose();
+    }
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('固定域名围栏：两次重建 proxy 后 PIN 不变、设备 cookie 仍有效', async () => {
+  const home = await tempHome();
+  const prev = process.env.DSH_HOME;
+  process.env.DSH_HOME = home;
+  const { getAccessToken } = await import('../lib/index.js');
+  const up = createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    res.end('ok');
+  });
+  const raw = (port, headers, method = 'GET', body, path = '/') => new Promise((resolve, reject) => {
+    const req = httpRequest({ host: '127.0.0.1', port, path, method, headers }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }));
+    });
+    req.on('error', reject);
+    if (body) req.write(body);
+    req.end();
+  });
+
+  try {
+    await new Promise((r) => up.listen(0, '127.0.0.1', r));
+    const pinBefore = getAccessToken();
+    const reg1 = createDeviceRegistry({ home, flushMs: 60_000 });
+    const proxy1 = await createPocketProxy({
+      port: 0,
+      host: '127.0.0.1',
+      upstream: { host: '127.0.0.1', port: up.address().port },
+      auth: { getToken: getAccessToken, isProtected: () => true, devices: reg1 },
+    });
+
+    const login = await raw(
+      proxy1.port,
+      { Host: 'fixed.example.com', 'Content-Type': 'application/x-www-form-urlencoded' },
+      'POST',
+      `token=${pinBefore}`,
+      '/pocket-login',
+    );
+    assert.equal(login.status, 302, '登录成功');
+    const sc = (login.headers['set-cookie'] || []).join(';');
+    const token = sc.match(/dsh_pocket_token=([^;]+)/)?.[1];
+    assert.ok(token && token.length === 43, '已铸造设备会话 token');
+
+    await proxy1.close();
+    await reg1.dispose(); // 落盘，模拟进程退出
+
+    // 第二次「重启」：新 registry + 新 proxy，PIN 不变、旧 cookie 仍有效
+    assert.equal(getAccessToken(), pinBefore, '固定域名 PIN 存储键稳定（重启不变）');
+    const reg2 = createDeviceRegistry({ home, flushMs: 60_000 });
+    const proxy2 = await createPocketProxy({
+      port: 0,
+      host: '127.0.0.1',
+      upstream: { host: '127.0.0.1', port: up.address().port },
+      auth: { getToken: getAccessToken, isProtected: () => true, devices: reg2 },
+    });
+    try {
+      const ok = await raw(proxy2.port, { Host: 'fixed.example.com', Accept: 'application/json', Cookie: `dsh_pocket_token=${token}` }, 'GET', undefined, '/api/hello');
+      assert.equal(ok.status, 200, '重启后设备 cookie 仍有效');
+    } finally {
+      await proxy2.close();
+      await reg2.dispose();
+    }
+  } finally {
+    if (prev === undefined) delete process.env.DSH_HOME;
+    else process.env.DSH_HOME = prev;
+    await new Promise((r) => up.close(r));
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('设备 token 必须 CSPRNG：源码无 Math.random 生成残留', () => {
+  const devicesSrc = readFileSync(new URL('../lib/devices.mjs', import.meta.url), 'utf8');
+  assert.match(devicesSrc, /randomBytes\(32\)\.toString\('base64url'\)/, 'token 用 crypto.randomBytes(32).toString(base64url)');
+  assert.doesNotMatch(devicesSrc, /Math\.random\(\)/, 'devices.mjs 无 Math.random');
+  const indexSrc = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8').replace(/\/\/[^\n]*/g, '');
+  assert.doesNotMatch(indexSrc, /Math\.random\(\)/, 'index.js 无实际 Math.random 调用（注释已剥离）');
+});
+
+test('RPC：device.* 与 publicBase.* 注册在 loopback-only handler', () => {
+  let opts = null;
+  const ctx = {
+    connection: { rpc: { handle: (_ch, _fn, o) => { opts = o; return () => {}; } } },
+  };
+  const dispose = installPocketRpc(ctx, {
+    service: { status: async () => ({ dshPort: 3080 }) },
+    devices: null,
+    getPublicBase: () => null,
+    setPublicBase: () => null,
+    clearPublicBase: () => null,
+  });
+  assert.equal(opts.authority, 'loopback', '整个 /dsh-pocket 通道仅 loopback 可调');
+  dispose();
 });

@@ -2764,7 +2764,7 @@ function publicBaseError(raw) {
   try {
     const u = new URL(s);
     if (u.protocol !== "https:") return "publicBaseErrProtocol";
-    if (u.pathname && u.pathname !== "/" || u.search || u.hash) return "publicBaseErrPath";
+    if (u.pathname !== "/" || /\/$/.test(s) || u.search || u.hash) return "publicBaseErrPath";
     if (u.username || u.password) return "publicBaseErrAuth";
     return null;
   } catch {

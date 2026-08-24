@@ -94,10 +94,10 @@ function writeSettingsRaw(p, obj) {
   _wfs12(p, JSON.stringify(obj), 'utf8');
 }
 
-test('normalizePublicOrigin：合法 https origin 归一化（去尾斜杠），非法返回 null', async () => {
+test('normalizePublicOrigin：合法 https origin 通过；http/路径/尾斜杠/query 拒绝', async () => {
   const { normalizePublicOrigin } = await import('../lib/settings.mjs');
   assert.equal(normalizePublicOrigin('https://dsh.example.com'), 'https://dsh.example.com');
-  assert.equal(normalizePublicOrigin('https://dsh.example.com/'), 'https://dsh.example.com', '尾斜杠剥掉');
+  assert.equal(normalizePublicOrigin('https://dsh.example.com/'), null, '尾斜杠拒绝');
   assert.equal(normalizePublicOrigin('  https://dsh.example.com  '), 'https://dsh.example.com', '首尾空白容忍');
   assert.equal(normalizePublicOrigin('https://dsh.example.com:8443'), 'https://dsh.example.com:8443', '非默认端口保留');
   assert.equal(normalizePublicOrigin('http://dsh.example.com'), null, 'http 强制拒绝');
@@ -121,8 +121,9 @@ test('publicBaseUrl：未配置 → null；脏数据 → warn 回落 null；set/
     writeSettingsRaw(settingsPath(), { lanAuthEnabled: true, publicBaseUrl: 'http://bad.example.com/path' });
     assert.equal(publicBaseUrl(), null, '脏数据按未配置处理（畸形值忽略回落）');
     assert.ok(warns.some((w) => w.includes('publicBaseUrl')), '有告警留痕');
-    assert.equal(setPublicBaseUrl('https://dsh.example.com/'), 'https://dsh.example.com', '归一化后保存');
-    assert.equal(publicBaseUrl(), 'https://dsh.example.com');
+    assert.equal(setPublicBaseUrl('https://dsh.example.com'), 'https://dsh.example.com', '合法保存');
+    assert.throws(() => setPublicBaseUrl('https://dsh.example.com/'), /https/, '尾斜杠写入拒绝');
+    assert.equal(publicBaseUrl(), 'https://dsh.example.com', '拒绝后原值不变');
     assert.equal(JSON.parse(readFileSync(settingsPath(), 'utf8')).publicBaseUrl, 'https://dsh.example.com', '已持久化');
     assert.throws(() => setPublicBaseUrl('http://nope.example.com'), /https/, '非法写入抛错');
     assert.equal(publicBaseUrl(), 'https://dsh.example.com', '抛错后原值不变');
