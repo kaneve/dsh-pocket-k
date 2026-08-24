@@ -766,3 +766,37 @@ test('公网固定地址：status.publicBase 生效——二维码/URL 改用固
   assert.equal(legacy.tunnelUrl, null);
   assert.equal(legacy.tunnelQr, null);
 });
+test('公网固定地址清除后：快速隧道未跑 tunnelUrl=null；跑起来后 tunnelUrl=tunnel.url', async () => {
+  const internals = stubInternals();
+  let publicBase = null;
+  const service = createPocketService({
+    dshPort: 3080,
+    port: 3081,
+    internals,
+    getPublicBaseUrl: () => publicBase,
+  });
+
+  try {
+    let s = await service.status();
+    assert.equal(s.tunnelUrl, null, '无固定地址且快速隧道未跑 → null');
+    assert.equal(s.tunnelRunning, false);
+
+    publicBase = 'https://dsh.example.com';
+    s = await service.status();
+    assert.equal(s.tunnelUrl, 'https://dsh.example.com', '有固定地址 → 固定 origin 优先');
+    assert.equal(s.tunnelRunning, false, '固定地址不改变快速隧道进程状态');
+
+    publicBase = null;
+    s = await service.status();
+    assert.equal(s.tunnelUrl, null, '清除固定地址且快速隧道未跑 → 回到 null');
+    assert.equal(s.tunnelRunning, false);
+
+    await service.startProxy();
+    await service.startTunnel();
+    s = await service.status();
+    assert.equal(s.tunnelRunning, true, '快速隧道进程已跑');
+    assert.equal(s.tunnelUrl, 'https://abc-123.trycloudflare.com', '无固定地址时恢复快速隧道 URL');
+  } finally {
+    await service.dispose();
+  }
+});
