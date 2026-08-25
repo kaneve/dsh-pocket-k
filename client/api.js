@@ -1,5 +1,5 @@
 // dsh-pocket 设置页签 RPC 契约（client 与 host 共享）
-export const POCKET_RPC_CHANNEL = '/dsh-pocket';
+export const POCKET_RPC_CHANNEL = '/dsh-pocket-k';
 
 export const POCKET_ENDPOINTS = Object.freeze({
   status: 'pocket.status',

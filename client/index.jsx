@@ -13,7 +13,7 @@ import { POCKET_RPC_CHANNEL, POCKET_ENDPOINTS, redactStatus, compareVersions } f
 import { apply as mobileApply } from './mobile';
 import { NS as POCKET_NS, zh as POCKET_ZH, en as POCKET_EN } from './pocket-locales.js';
 
-const name = 'dsh-pocket';
+const name = 'dsh-pocket-k';
 const inject = ['slots', 'connection', 'layout', 'locale', 'sessionLogDownload'];
 
 // 词典在 pocket-locales.js；这里只做「取 key → 替换 {占位符} → 字符串」。
@@ -669,7 +669,7 @@ function PocketSettingsTab({ rpcCall, t }) {
 
     // 页面最底部：反馈入口
     h('div', { style: { ...styles.block, textAlign: 'center' } },
-      h('a', { href: 'https://github.com/shaobeichen/dsh-pocket/issues', target: '_blank', rel: 'noreferrer', style: { fontSize: 12, color: 'var(--dsw-alias-label-secondary,#6b7280)', textDecoration: 'none' } },
+      h('a', { href: 'https://github.com/kaneve/dsh-pocket-k/issues', target: '_blank', rel: 'noreferrer', style: { fontSize: 12, color: 'var(--dsw-alias-label-secondary,#6b7280)', textDecoration: 'none' } },
         t('feedback')),
     ),
   );

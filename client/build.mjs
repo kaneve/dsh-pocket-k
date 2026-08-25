@@ -7,7 +7,7 @@ import { build } from 'esbuild';
 const sourceDir = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(sourceDir, '..');
 const outputPath = resolve(packageRoot, 'client/client.js');
-const loaderId = process.env.DSH_POCKET_CLIENT_ID ?? 'dsh-pocket';
+const loaderId = process.env.DSH_POCKET_CLIENT_ID ?? 'dsh-pocket-k';
 
 const result = await build({
   entryPoints: [resolve(sourceDir, 'index.jsx')],
