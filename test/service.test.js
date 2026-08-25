@@ -1,4 +1,4 @@
-// dsh-pocket 服务 + RPC 测试（stub 隧道/代理，无网络）
+// dsh-pocket-k 服务 + RPC 测试（stub 隧道/代理，无网络）
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -374,7 +374,7 @@ test('readRestartNotice：真实文件系统（无文件/坏 JSON/过期/有效�
   const path = await import('node:path');
   const { readRestartNotice } = await import('../lib/index.js');
 
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-pocket-test-'));
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-pocket-k-test-'));
   const prev = process.env.DSH_HOME;
   process.env.DSH_HOME = dir;
   try {
@@ -382,16 +382,16 @@ test('readRestartNotice：真实文件系统（无文件/坏 JSON/过期/有效�
     assert.equal(await readRestartNotice(), null, '无标记文件返回 null');
 
     // 2. 坏 JSON → null
-    await fsp.mkdir(path.join(dir, 'dsh-pocket'), { recursive: true });
-    await fsp.writeFile(path.join(dir, 'dsh-pocket', 'restarted.json'), 'not-json');
+    await fsp.mkdir(path.join(dir, 'dsh-pocket-k'), { recursive: true });
+    await fsp.writeFile(path.join(dir, 'dsh-pocket-k', 'restarted.json'), 'not-json');
     assert.equal(await readRestartNotice(), null, '坏 JSON 返回 null');
 
     // 3. 过期标记（31 分钟前）→ null
-    await fsp.writeFile(path.join(dir, 'dsh-pocket', 'restarted.json'), JSON.stringify({ at: Date.now() - 31 * 60 * 1000, pid: 1 }));
+    await fsp.writeFile(path.join(dir, 'dsh-pocket-k', 'restarted.json'), JSON.stringify({ at: Date.now() - 31 * 60 * 1000, pid: 1 }));
     assert.equal(await readRestartNotice(), null, '过期标记返回 null');
 
     // 4. 有效标记 → 返回内容
-    await fsp.writeFile(path.join(dir, 'dsh-pocket', 'restarted.json'), JSON.stringify({ at: Date.now(), pid: 4242 }));
+    await fsp.writeFile(path.join(dir, 'dsh-pocket-k', 'restarted.json'), JSON.stringify({ at: Date.now(), pid: 4242 }));
     const n = await readRestartNotice();
     assert.equal(n.pid, 4242, '有效标记返回 pid');
   } finally {
@@ -406,11 +406,11 @@ test('consumeRestartNotice：读后即删（横幅只显示一次，不会一直
   const path = await import('node:path');
   const { consumeRestartNotice } = await import('../lib/index.js');
 
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-pocket-consume-'));
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-pocket-k-consume-'));
   const prev = process.env.DSH_HOME;
   process.env.DSH_HOME = dir;
   try {
-    const noticePath = path.join(dir, 'dsh-pocket', 'restarted.json');
+    const noticePath = path.join(dir, 'dsh-pocket-k', 'restarted.json');
     await fsp.mkdir(path.dirname(noticePath), { recursive: true });
     await fsp.writeFile(noticePath, JSON.stringify({ at: Date.now(), pid: 4242 }));
 
@@ -666,7 +666,7 @@ test('公网隧道自动恢复：开启时持久化标记，重启后 restoreTun
   // 开启隧道 → 持久化标记（persistAutoTunnel 是异步 fire-and-forget，等它落盘）
   await service.startTunnel();
   await new Promise((r) => setTimeout(r, 60));
-  const statePath = path.join(home, 'dsh-pocket', 'tunnel-auto.json');
+  const statePath = path.join(home, 'dsh-pocket-k', 'tunnel-auto.json');
   assert.ok((await fsp.readFile(statePath, 'utf8')).includes('"at"'), '开启后写入标记');
 
   // 模拟重启：新 service 实例（相同 home）→ 自动恢复

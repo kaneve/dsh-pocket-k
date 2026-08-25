@@ -1,4 +1,4 @@
-// dsh-pocket 代理测试（假上游，验证 Host/Origin 改写 + WebSocket 透传）
+// dsh-pocket-k 代理测试（假上游，验证 Host/Origin 改写 + WebSocket 透传）
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -714,7 +714,7 @@ test('登录速率限制（issue #40 改进版 A）：单 IP 失败达阈值锁�
 test('advancedNoticeScript：注入 advanced 模式提示覆盖层（issue #19）', async () => {
   const { advancedNoticeScript } = await import('../lib/proxy.mjs');
   const s = advancedNoticeScript();
-  assert.ok(s.includes('dsh-pocket-advanced-notice'), '有标记');
+  assert.ok(s.includes('dsh-pocket-k-advanced-notice'), '有标记');
   assert.ok(s.includes('advanced'), '提示 advanced');
   assert.ok(s.includes('compatibility'), '提示切回 compatibility');
   assert.ok(s.includes('position:fixed'), '固定覆盖层（白屏也能看到）');

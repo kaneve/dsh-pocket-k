@@ -4,7 +4,7 @@
   "type": "module",
   "main": "lib/index.js",
   "bin": {
-    "dsh-pocket-k": "bin/dsh-pocket.mjs"
+    "dsh-pocket-k": "bin/dsh-pocket-k.mjs"
   },
   "exports": {
     ".": {

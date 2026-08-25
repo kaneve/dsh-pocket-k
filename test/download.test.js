@@ -91,7 +91,7 @@ test('resolveCloudflared：手动放置的资产名文件也能命中缓存（is
   const assetName = `cloudflared-${osName}-${arch}${osName === 'windows' ? '.exe' : ''}`;
 
   // 只放资产名文件（不是 bin 名）→ 应命中，不触发下载
-  const binDir = path.join(home, 'dsh-pocket', 'bin');
+  const binDir = path.join(home, 'dsh-pocket-k', 'bin');
   await fsp.mkdir(binDir, { recursive: true });
   await fsp.writeFile(path.join(binDir, assetName), 'fake-binary');
   let downloading = false;
@@ -109,7 +109,7 @@ test('resolveCloudflared：Linux 上丢弃 Homebrew bottle 坏缓存（issue #22
   const path = await import('node:path');
   const { resolveCloudflared } = await import('../lib/tunnel.mjs');
   const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'dshp-homebrew-'));
-  const binDir = path.join(home, 'dsh-pocket', 'bin');
+  const binDir = path.join(home, 'dsh-pocket-k', 'bin');
   await fsp.mkdir(binDir, { recursive: true });
   // 模拟 Linux Homebrew bottle 坏缓存：文件含 @@HOMEBREW_PREFIX@@ 占位符
   await fsp.writeFile(path.join(binDir, 'cloudflared'), '@@HOMEBREW_PREFIX@@/lib/ld.so\x00fake-binary');

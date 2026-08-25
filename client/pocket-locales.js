@@ -1,6 +1,6 @@
-// dsh-pocket 设置页签 i18n 词典（与 client/mobile/locales.ts 同款：zh 为源真，en 为译文）。
+// dsh-pocket-k 设置页签 i18n 词典（与 client/mobile/locales.ts 同款：zh 为源真，en 为译文）。
 // 需要新增字符串时：先加到 zh（key-set 唯一来源），再补 en（key 必须与 zh 完全一致）。
-export const NS = 'pocket'
+export const NS = 'pocket-k'
 
 /** Simplified Chinese dictionary (the key-set source of truth). */
 export const zh = {

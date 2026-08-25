@@ -1,4 +1,4 @@
-// dsh-pocket 网页客户端：
+// dsh-pocket-k 网页客户端：
 //   1. 设置页签「手机访问」（局域网/公网二维码 + 更新/重启提示）
 //   2. 移动端适配（移植自本地 fork dsh-web-mobile v2.0.0，upstream mexiaosqwq/dsh-web-mobile，MIT；见 client/mobile/LICENSE.dsh-web-mobile）
 //
@@ -141,7 +141,7 @@ function PocketSettingsTab({ rpcCall, t }) {
     const check = async () => {
       try {
         const v = await call(POCKET_ENDPOINTS.version, {});
-        const meta = await (await fetch('https://registry.npmjs.org/dsh-pocket/latest', { cache: 'no-store' })).json();
+        const meta = await (await fetch('https://registry.npmjs.org/dsh-pocket-k/latest', { cache: 'no-store' })).json();
         if (!alive) return;
         const latest = typeof meta?.version === 'string' ? meta.version : null;
         if (latest && v.current && compareVersions(latest, v.current) > 0) {
@@ -684,14 +684,14 @@ export function apply(ctx) {
 
   // 设置页签接入 DSH 本地化：注册 pocket 词典（zh/en），并绑定一个随当前 locale 切换的 t()。
   const translate = ctx.locale.bind(POCKET_NS);
-  ctx.effect(() => ctx.locale.register(POCKET_NS, { zh: POCKET_ZH, en: POCKET_EN }), 'dsh-pocket: pocket locale dictionaries');
+  ctx.effect(() => ctx.locale.register(POCKET_NS, { zh: POCKET_ZH, en: POCKET_EN }), 'dsh-pocket-k: pocket locale dictionaries');
 
   // 设置一级入口（与 通用设置/模型/插件 同级，order 1 = 通用之后、最外层）
   ctx.slots.inject('settings.section', () =>
     ctx.slots.register(
       {
         name: 'settings.section',
-        id: 'pocket',
+        id: 'pocket-k',
         order: 1,
         label: () => translate('section'),
         inject: () => ({ rpcCall, t: translate }),

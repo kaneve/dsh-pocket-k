@@ -1,4 +1,4 @@
-// dsh-pocket 设备会话注册表 + 代理逐台撤销测试（t13）
+// dsh-pocket-k 设备会话注册表 + 代理逐台撤销测试（t13）
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -22,7 +22,7 @@ function fakeCtxConnection() {
 }
 
 async function tempHome() {
-  return mkdtemp(join(tmpdir(), 'dsh-pocket-devices-'));
+  return mkdtemp(join(tmpdir(), 'dsh-pocket-k-devices-'));
 }
 
 test('parseDeviceName：轻量平台解析，不返回完整 UA', () => {
@@ -60,7 +60,7 @@ test('devices registry：铸造/校验/列出/撤销/持久化', async () => {
     assert.equal(reg.list('abc.trycloudflare.com')[0].online, false, '断开后立即离线');
 
     await reg.flush();
-    const raw = JSON.parse(await readFile(join(home, 'dsh-pocket', 'devices.json'), 'utf8'));
+    const raw = JSON.parse(await readFile(join(home, 'dsh-pocket-k', 'devices.json'), 'utf8'));
     assert.ok(raw['abc.trycloudflare.com'][issued.id], '文件持久化');
     assert.ok(!('token' in raw['abc.trycloudflare.com'][issued.id]), '原始 token 不落盘');
 
@@ -242,8 +242,8 @@ test('devices registry：50 台/host 上限 LRU；30 天无活动 host GC', asyn
   const ttlMs = 200;
   try {
     // 先写一个「lastSeenAt 很旧但 createdAt 很新」的 host，专测 host 整体 GC
-    const devicesFile = join(home, 'dsh-pocket', 'devices.json');
-    mkdirSync(join(home, 'dsh-pocket'), { recursive: true });
+    const devicesFile = join(home, 'dsh-pocket-k', 'devices.json');
+    mkdirSync(join(home, 'dsh-pocket-k'), { recursive: true });
     const now = Date.now();
     writeFileSync(devicesFile, JSON.stringify({
       'old-host': {
@@ -368,6 +368,6 @@ test('RPC：device.* 与 publicBase.* 注册在 loopback-only handler', () => {
     setPublicBase: () => null,
     clearPublicBase: () => null,
   });
-  assert.equal(opts.authority, 'loopback', '整个 /dsh-pocket 通道仅 loopback 可调');
+  assert.equal(opts.authority, 'loopback', '整个 /dsh-pocket-k 通道仅 loopback 可调');
   dispose();
 });

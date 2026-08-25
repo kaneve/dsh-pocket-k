@@ -2660,7 +2660,7 @@ function apply(ctx) {
 }
 
 // client/pocket-locales.js
-var NS3 = "pocket";
+var NS3 = "pocket-k";
 var zh2 = {
   "section": "\u624B\u673A\u8BBF\u95EE",
   "title": "\u{1F4F1} \u624B\u673A\u8BBF\u95EE",
@@ -2984,7 +2984,7 @@ function PocketSettingsTab({ rpcCall, t }) {
     const check = async () => {
       try {
         const v = await call(POCKET_ENDPOINTS.version, {});
-        const meta = await (await fetch("https://registry.npmjs.org/dsh-pocket/latest", { cache: "no-store" })).json();
+        const meta = await (await fetch("https://registry.npmjs.org/dsh-pocket-k/latest", { cache: "no-store" })).json();
         if (!alive) return;
         const latest = typeof meta?.version === "string" ? meta.version : null;
         if (latest && v.current && compareVersions(latest, v.current) > 0) {
@@ -3571,13 +3571,13 @@ function apply2(ctx) {
   apply(ctx);
   const rpcCall = (endpoint, payload, signal) => ctx.connection.rpc.call(POCKET_RPC_CHANNEL, endpoint, payload, signal);
   const translate = ctx.locale.bind(NS3);
-  ctx.effect(() => ctx.locale.register(NS3, { zh: zh2, en: en2 }), "dsh-pocket: pocket locale dictionaries");
+  ctx.effect(() => ctx.locale.register(NS3, { zh: zh2, en: en2 }), "dsh-pocket-k: pocket locale dictionaries");
   ctx.slots.inject(
     "settings.section",
     () => ctx.slots.register(
       {
         name: "settings.section",
-        id: "pocket",
+        id: "pocket-k",
         order: 1,
         label: () => translate("section"),
         inject: () => ({ rpcCall, t: translate })

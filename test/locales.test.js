@@ -31,5 +31,5 @@ test('pocket 词典：源码 t()/fmt() 引用的 key 都在词典中', () => {
   // section 经 translate() 调用，单独校验
   assert.equal(zh.section, '手机访问', 'tab 标签中文');
   assert.equal(en.section, 'Phone access', 'tab 标签英文');
-  assert.equal(NS, 'pocket', 'namespace 固定');
+  assert.equal(NS, 'pocket-k', 'namespace 固定');
 });

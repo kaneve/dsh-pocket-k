@@ -10,7 +10,7 @@ import {
 } from '../lib/cloudflare.mjs';
 
 test('tunnelNameFor：域名清洗为小写连字符，保持稳定', () => {
-  assert.equal(tunnelNameFor('dsh.Example.COM'), 'dsh-pocket-dsh-example-com');
+  assert.equal(tunnelNameFor('dsh.Example.COM'), 'dsh-pocket-k-dsh-example-com');
   assert.equal(tunnelNameFor('a'.repeat(80) + '.com'), tunnelNameFor('a'.repeat(80) + '.com'));
   assert.ok(tunnelNameFor('a'.repeat(80) + '.com').length <= 63, '超长名截断到 63 字符内');
 });
@@ -43,10 +43,10 @@ function fakeStream(records) {
       return jsonResponse({ success: true, result: [] }); // 未命中的 Zone 查询：空列表让 findZone 继续向上
     }
     if (path === '/accounts/acc1/cfd_tunnel' && method === 'GET') {
-      return jsonResponse({ success: true, result: [{ id: 'tun-exist', name: 'dsh-pocket-fixed' }] });
+      return jsonResponse({ success: true, result: [{ id: 'tun-exist', name: 'dsh-pocket-k-fixed' }] });
     }
     if (path === '/accounts/acc1/cfd_tunnel' && method === 'POST') {
-      return jsonResponse({ success: true, result: { id: 'tun-new', name: 'dsh-pocket-fixed' } });
+      return jsonResponse({ success: true, result: { id: 'tun-new', name: 'dsh-pocket-k-fixed' } });
     }
     if (path === '/accounts/acc1/cfd_tunnel/tun-exist/token') {
       return jsonResponse({ success: true, result: 'tk-exist' }); // 官方实际返回字符串
@@ -99,11 +99,11 @@ test('createCloudflareApi.findZone：找不到时抛错', async () => {
 test('createCloudflareApi.ensureTunnel：已存在直接取 token，不存在则创建', async () => {
   const { fetchImpl, calls } = fakeStream();
   const api = createCloudflareApi(fetchImpl);
-  const existing = await api.ensureTunnel('tok', { accountId: 'acc1', tunnelName: 'dsh-pocket-fixed' });
+  const existing = await api.ensureTunnel('tok', { accountId: 'acc1', tunnelName: 'dsh-pocket-k-fixed' });
   assert.deepEqual(existing, { tunnelId: 'tun-exist', connectorToken: 'tk-exist' });
   assert.ok(!calls.some((c) => c.init.method === 'POST' && c.url.includes('/cfd_tunnel')));
 
-  const created = await api.ensureTunnel('tok', { accountId: 'acc1', tunnelName: 'dsh-pocket-new' });
+  const created = await api.ensureTunnel('tok', { accountId: 'acc1', tunnelName: 'dsh-pocket-k-new' });
   assert.deepEqual(created, { tunnelId: 'tun-new', connectorToken: 'tk-new' });
   assert.ok(calls.some((c) => c.init.method === 'POST' && c.url.includes('/cfd_tunnel')));
 });
