@@ -3,7 +3,7 @@
 // and closes in this file. Concatenation order still matters for the
 // cascade (compat intentionally overrides layout), just not for syntax.
 
-export const COMPAT_CSS = `@media (max-width: 1023px) {
+export const COMPAT_CSS = `@media (max-width: 1023px) and (pointer: coarse) {
   /* ---------- dsh-web-ui family compatibility ----------
      The linxin666 plugin suite extends the shell frame directly:
        - aionui-panel appends two trailing grid columns (explorer / preview)
@@ -58,7 +58,7 @@ export const COMPAT_CSS = `@media (max-width: 1023px) {
     border-radius: 14px !important;
     overflow: hidden !important;
     box-shadow: 0 -4px 28px rgba(0, 0, 0, .18) !important;
-    animation: dsh-mobile-nav-sheet-up .24s var(--ds-ease-out, ease-in-out) !important;
+    animation: dsh-web-mobile-sheet-up .24s var(--ds-ease-out, ease-in-out) !important;
   }
   /* Preview (file content) bottom sheet. Gated shut by default: the suite
      persists open preview tabs in localStorage and restores them on load,
@@ -79,7 +79,7 @@ export const COMPAT_CSS = `@media (max-width: 1023px) {
     overflow: hidden !important;
     box-shadow: 0 -4px 28px rgba(0, 0, 0, .18) !important;
     z-index: 56 !important;
-    animation: dsh-mobile-nav-sheet-up .24s var(--ds-ease-out, ease-in-out) !important;
+    animation: dsh-web-mobile-sheet-up .24s var(--ds-ease-out, ease-in-out) !important;
     /* Fullscreen toggle (issue #8): animate the geometry change instead of
        snapping. visibility is deliberately not listed, so opening/closing
        the sheet stays instant; the open/close keyframes own transform. */
@@ -170,7 +170,7 @@ export const COMPAT_CSS = `@media (max-width: 1023px) {
   }
   /* Keep the last tab (and the "+" URL-tab trigger) from sliding under the
      fullscreen toggle: reserve the right end of the preview tab row. */
-  [data-aionui-preview-col] [class$="_tabScroll"] {
+  [data-aionui-preview-col] [class*="_tabScroll"] {
     padding-right: 34px !important;
   }
   /* Visible only while the preview sheet is open. Visibility itself is
@@ -180,13 +180,13 @@ export const COMPAT_CSS = `@media (max-width: 1023px) {
     display: inline-flex !important;
   }
   /* Icon swap on the frame fullscreen marker. */
-  [data-mobile-nav="preview-full-toggle"] .dsh-mobile-nav-full-out {
+  [data-mobile-nav="preview-full-toggle"] .dsh-web-mobile-full-out {
     display: none !important;
   }
-  [data-mobile-nav="frame"][data-mobile-preview-full] [data-aionui-preview-col] [data-mobile-nav="preview-full-toggle"] .dsh-mobile-nav-full-in {
+  [data-mobile-nav="frame"][data-mobile-preview-full] [data-aionui-preview-col] [data-mobile-nav="preview-full-toggle"] .dsh-web-mobile-full-in {
     display: none !important;
   }
-  [data-mobile-nav="frame"][data-mobile-preview-full] [data-aionui-preview-col] [data-mobile-nav="preview-full-toggle"] .dsh-mobile-nav-full-out {
+  [data-mobile-nav="frame"][data-mobile-preview-full] [data-aionui-preview-col] [data-mobile-nav="preview-full-toggle"] .dsh-web-mobile-full-out {
     display: inline !important;
   }
   /* Fullscreen preview: the sheet fills the whole viewport (notch included);
@@ -230,7 +230,7 @@ export const COMPAT_CSS = `@media (max-width: 1023px) {
 
   /* Task board: five kanban columns at minmax(0,1fr) crush into ~78px phone
      strips. Give every column a usable minimum and let the row scroll. */
-  [data-dsh-taskboard-board] > [class$="_columns"] {
+  [data-dsh-taskboard-board] > [class*="_columns"] {
     grid-template-columns: repeat(5, minmax(240px, 1fr)) !important;
     overflow-x: auto !important;
   }
@@ -244,7 +244,7 @@ export const COMPAT_CSS = `@media (max-width: 1023px) {
   }
   /* Board header: let the search field take the slack instead of squeezing
      the action buttons. */
-  [data-dsh-taskboard-board] > [class$="_boardHeader"] [class$="_search"] {
+  [data-dsh-taskboard-board] > [class*="_boardHeader"] [class*="_search"] {
     flex: 1 1 auto !important;
     min-width: 80px !important;
   }
@@ -257,14 +257,83 @@ export const COMPAT_CSS = `@media (max-width: 1023px) {
      the sheet's options area). Let the row wrap: the tabs keep the first
      line and the search box gets its own full-width second line. */
 
-  [aria-modal="true"] [class$="_tabs"] {
+  [aria-modal="true"] [class*="_tabs"] {
     flex-wrap: wrap !important;
     row-gap: 8px !important;
   }
-  [aria-modal="true"] [class$="_searchInline"] {
+  [aria-modal="true"] [class*="_searchInline"] {
     flex: 1 1 100% !important;
     width: 100% !important;
     max-width: 100% !important;
+  }
+  /* iOS Safari auto-zooms a focused input whose computed font-size is below
+     16px. dshmarket's tab search uses the shared primitive Input at 13px;
+     raise only this market-owned field on mobile so focusing it keeps the
+     current viewport scale. Scoped to the market root to avoid changing
+     unrelated settings/search fields; pinch zoom stays available. */
+  [data-dsh-market-root] [class*="tabSearch"] input,
+  [data-dsh-market-root] input[class*="tabSearch"] {
+    font-size: 16px !important;
+  }
+
+  /* ---------- dshmarket polish: Tasks operations popup ----------
+     Upstream .opPanel is a small dropdown pinned to the right edge of its
+     ~54px trigger button; on a phone it reads as stuck to the sheet edge
+     instead of centered. Promote it to a fixed, viewport-centered card:
+     no ancestor between the popup and the viewport carries a transform,
+     so position:fixed centers against the real viewport (a plain left:50%
+     would resolve against the tiny relative trigger wrapper and land even
+     further right). The upstream 86vw width cap, 70vh max-height and
+     internal scroll all still apply; the close button stays inside. */
+  [data-mobile-nav="frame"] [aria-modal="true"] [class*="_opPanel"] {
+    position: fixed !important;
+    top: 50% !important;
+    bottom: auto !important;
+    left: 50% !important;
+    right: auto !important;
+    transform: translate(-50%, -50%) !important;
+  }
+
+  /* ---------- dshmarket polish: header title row ----------
+     The title row (icon + title + repo link + version + optional
+     "Update market" / "Update all" buttons) is a nowrap flex whose
+     natural width (~450px with both update buttons) exceeds the ~334px
+     sheet. Flex then crushes the flexible items below their content
+     width and every label wraps word-by-word — the "text turns
+     vertical" report. Trigger is state-dependent (the buttons only
+     exist while plugin updates are pending), which explains the
+     sometimes-horizontal/sometimes-vertical flapping. Let the row wrap
+     instead: line 1 keeps icon + title + repo + version, the update
+     buttons get their own full-width-feeling second line, and the title
+     itself is locked to one ellipsized line no matter what follows it. */
+  [data-mobile-nav="frame"] [aria-modal="true"] [class*="_titleRow"] {
+    flex-wrap: wrap !important;
+    row-gap: 6px !important;
+  }
+  [data-mobile-nav="frame"] [aria-modal="true"] [class*="_titleRow"] [class*="_title"] {
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+  [data-mobile-nav="frame"] [aria-modal="true"] [class*="_titleRow"] button {
+    white-space: nowrap !important;
+  }
+
+  /* ---------- dshmarket 1.20+ compat: keep the settings nav visible ----------
+     Upstream Market.module.css hides the host dialog's nav on phones
+     ([role=dialog]:has([data-dsh-market-root]) > nav { display:none } at
+     max-width:560px) so the market can take over the dialog; its comment
+     assumes the host keeps "its own close button in the content header".
+     Our host's only close ✕ lives inside that very nav, so the market
+     would leave no categories and no way back or out (dead-end UI,
+     2026-08-23). Mirror upstream's exact media condition and restore the
+     nav: categories row + ✕ stay above the inline market page. */
+  @media (max-width: 560px) {
+    [data-mobile-nav="frame"] [role="dialog"]:has([data-dsh-market-root]) > nav {
+      display: flex !important;
+    }
   }
 
   /* ---------- dsh-usage-stats polish: usage & balance panel ----------
@@ -275,10 +344,10 @@ export const COMPAT_CSS = `@media (max-width: 1023px) {
      Stack the three counters vertically — full-width rows, so the figures
      always fit. */
 
-  [class*="usg_"][class$="_statsRow"] {
+  [class*="usg_"][class*="_statsRow"] {
     flex-direction: column !important;
   }
-  [class*="usg_"][class$="_stat"] {
+  [class*="usg_"][class*="_stat"]:not([class*="_statsRow"]) {
     flex: 0 0 auto !important;
     width: 100% !important;
     min-width: 0 !important;
@@ -297,7 +366,7 @@ export const COMPAT_CSS = `@media (max-width: 1023px) {
      one-row attempt had no scroll affordance and silently cut the last
      tab off; the thin scrollbar IS the affordance. Scoped to the frame
      marker: the desktop dialog keeps its official vertical nav column. */
-  [data-mobile-nav="frame"] [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :first-child [class$="_navList"] {
+  [data-mobile-nav="frame"] [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :first-child [class*="_navList"] {
     display: flex !important;
     flex-wrap: nowrap !important;
     overflow-x: auto !important;
@@ -309,17 +378,17 @@ export const COMPAT_CSS = `@media (max-width: 1023px) {
   }
   /* Hairline scrollbar for the tab row: the default WebKit scrollbar reads
      fat on a phone; 2px keeps the scroll affordance without the bulk. */
-  [data-mobile-nav="frame"] [aria-modal="true"] [class$="_navList"]::-webkit-scrollbar {
+  [data-mobile-nav="frame"] [aria-modal="true"] [class*="_navList"]::-webkit-scrollbar {
     height: 2px !important;
   }
-  [data-mobile-nav="frame"] [aria-modal="true"] [class$="_navList"]::-webkit-scrollbar-thumb {
+  [data-mobile-nav="frame"] [aria-modal="true"] [class*="_navList"]::-webkit-scrollbar-thumb {
     background: var(--dsw-alias-border-l2, rgba(0, 0, 0, .22)) !important;
     border-radius: 1px !important;
   }
-  [data-mobile-nav="frame"] [aria-modal="true"] [class$="_navList"]::-webkit-scrollbar-track {
+  [data-mobile-nav="frame"] [aria-modal="true"] [class*="_navList"]::-webkit-scrollbar-track {
     background: transparent !important;
   }
-  [data-mobile-nav="frame"] [aria-modal="true"] [class$="_navCell"] {
+  [data-mobile-nav="frame"] [aria-modal="true"] [class*="_navCell"] {
     flex: 0 0 auto !important;
     white-space: nowrap !important;
     padding: 6px 8px !important;
@@ -327,7 +396,7 @@ export const COMPAT_CSS = `@media (max-width: 1023px) {
     font-size: 13px !important;
     justify-content: flex-start !important;
   }
-  [data-mobile-nav="frame"] [aria-modal="true"] [class$="_navCell"] svg {
+  [data-mobile-nav="frame"] [aria-modal="true"] [class*="_navCell"] svg {
     width: 14px !important;
     height: 14px !important;
     flex: none !important;
@@ -336,31 +405,36 @@ export const COMPAT_CSS = `@media (max-width: 1023px) {
      mobile — it is rarely needed on a phone and steals ~180px from the
      tab row's scroll area (user feedback 2026-08-16). Only the close ✕
      stays, flush right in the nav row. Desktop untouched (frame scoped). */
-  [data-mobile-nav="frame"] [aria-modal="true"] [class$="_header"] [class$="_actions"] {
+  [data-mobile-nav="frame"] [aria-modal="true"] [class*="_header"]:not([class*="_headerActions"]) [class*="_actions"] {
     display: none !important;
   }
-  [data-mobile-nav="frame"] [aria-modal="true"] [class$="_header"] [class$="_actions"] [class$="_action"] {
+  [data-mobile-nav="frame"] [aria-modal="true"] [class*="_header"]:not([class*="_headerActions"]) [class*="_actions"] [class*="_action"]:not([class*="_actions"]) {
     font-size: 13px !important;
     padding: 6px 12px !important;
     min-height: 0 !important;
   }
-  /* Setting rows: text on top, control below at full width. */
-  [aria-modal="true"] [class$="_section"] [class$="_row"] {
+  /* Setting rows: text on top, control below at full width. Compound
+     "_row*" families are excluded: the Models page names its whole card
+     list "_rows" (plus "_rowCard/_rowHead/_rowIdentity/_rowActions"), and
+     the bare-substring match used to hand the list's first/last cards a
+     width:100% that - on the official content-box cards (+14px padding,
+     1px border) - ran 30px past their siblings and off-screen. */
+  [aria-modal="true"] [class*="_section"] [class*="_row"]:not([class*="_rows"]):not([class*="_rowCard"]):not([class*="_rowHead"]):not([class*="_rowIdentity"]):not([class*="_rowActions"]) {
     flex-direction: column !important;
     align-items: stretch !important;
     gap: 8px !important;
   }
-  [aria-modal="true"] [class$="_section"] [class$="_row"] > :first-child {
+  [aria-modal="true"] [class*="_section"] [class*="_row"]:not([class*="_rows"]):not([class*="_rowCard"]):not([class*="_rowHead"]):not([class*="_rowIdentity"]):not([class*="_rowActions"]) > :first-child {
     width: 100% !important;
     max-width: none !important;
   }
-  [aria-modal="true"] [class$="_section"] [class$="_row"] > :last-child {
+  [aria-modal="true"] [class*="_section"] [class*="_row"]:not([class*="_rows"]):not([class*="_rowCard"]):not([class*="_rowHead"]):not([class*="_rowIdentity"]):not([class*="_rowActions"]) > :last-child {
     width: 100% !important;
     max-width: none !important;
   }
   /* Appearance mode group: give the cube row a consistent bordered
      segmented look (the official borders differ per state). */
-  [aria-modal="true"] [class$="_cubeRow"] > * {
+  [aria-modal="true"] [class*="_cubeRow"] > * {
     border: 1px solid var(--dsw-alias-border-l1, rgba(0, 0, 0, .12)) !important;
   }
 
@@ -369,15 +443,15 @@ export const COMPAT_CSS = `@media (max-width: 1023px) {
      header, search box and tree rows so a phone shows more entries, and pad
      the scroll bottom so the last row never sits flush on the edge. */
 
-  [data-aionui-explorer-col] [class$="_tabBar"] {
+  [data-aionui-explorer-col] [class*="_tabBar"]:not([class*="_tabBarRight"]) {
     height: 36px !important;
   }
-  [data-aionui-explorer-col] [class$="_tabBtn"],
-  [data-aionui-explorer-col] [class$="_tabBtnActive"] {
+  [data-aionui-explorer-col] [class*="_tabBtn"],
+  [data-aionui-explorer-col] [class*="_tabBtnActive"] {
     padding: 0 12px !important;
     font-size: 13px !important;
   }
-  [data-aionui-explorer-col] [class$="_searchBox"] {
+  [data-aionui-explorer-col] [class*="_searchBox"] {
     height: 32px !important;
     font-size: 13px !important;
   }
@@ -389,7 +463,7 @@ export const COMPAT_CSS = `@media (max-width: 1023px) {
     width: 14px !important;
     height: 14px !important;
   }
-  [data-aionui-explorer-col] [class$="_scrollArea"] {
+  [data-aionui-explorer-col] [class*="_scrollArea"] {
     padding-bottom: 28px !important;
   }
 
@@ -400,7 +474,7 @@ export const COMPAT_CSS = `@media (max-width: 1023px) {
   /* The official footerActions row also hosts the remote-web-ui entry
      row (two icon buttons); without wrapping the two groups squeeze each
      other on one line. Wrap so each group gets its own full-width row. */
-  [data-mobile-nav="frame"] [class$="_footerActions"] {
+  [data-mobile-nav="frame"] [class*="_footerActions"] {
     flex-wrap: wrap !important;
     gap: 6px !important;
   }
@@ -420,14 +494,14 @@ export const COMPAT_CSS = `@media (max-width: 1023px) {
      still work (the position itself is left alone — the mobile default
      position is seeded via the pet API to just above the composer). */
 
-  body > [class$="_float"]:has([class$="_sprite"][role="button"]) {
+  body > [class*="_float"]:has([class*="_sprite"][role="button"]) {
     transform: scale(.66);
     transform-origin: bottom right;
   }
   /* While a modal dialog (settings sheet / export) owns the screen the pet
      floats ABOVE it and covers the dialog content; modal semantics say the
      background is inert, so hide the pet for the modal's lifetime. */
-  body:has([aria-modal="true"]) > [class$="_float"]:has([class$="_sprite"][role="button"]) {
+  body:has([aria-modal="true"]) > [class*="_float"]:has([class*="_sprite"][role="button"]) {
     display: none !important;
   }
 
@@ -542,10 +616,10 @@ export const COMPAT_CSS = `@media (max-width: 1023px) {
      exists below 1024px, and the effect restores the chip to the dock when
      the viewport widens. Chip row geometry (2026-08-16, user feedback):
      48px padding left a 16px dead gap between the chip and the input line
-     and made the composer read too tall; the row is now 40px = chip (24px)
-     at top 12px + ~4px to the textarea — the chip sits slightly lower and
-     the gap is compressed without touching the official height budget
-     further. */
+     and made the composer read too tall; the row was tuned to 40px = chip
+     (24px) at top 12px + ~4px to the textarea. The chip itself has since
+     grown to 28px (git-graph chip CSS), which ate the breathing gap, so the
+     row is 44px to keep the same ~4px clearance (2026-09-06). */
 
   [data-mobile-nav="frame"] [data-gitgraph-chip-anchor] {
     position: absolute !important;
@@ -555,8 +629,120 @@ export const COMPAT_CSS = `@media (max-width: 1023px) {
     bottom: auto !important;
     z-index: 1 !important;
   }
-  [data-mobile-nav="frame"] [class$="_card"]:has([data-gitgraph-chip-anchor]) {
-    padding-top: 40px !important;
+  [data-mobile-nav="frame"] [class*="_card"]:has([data-gitgraph-chip-anchor]) {
+    padding-top: 44px !important;
+  }
+  /* Kill double-tap zoom on the chip wherever it lives (the tap-target trio
+     in misc.css is scoped to the dock slot and dies once the reparent moves
+     the anchor into the card). Geometry-free: touch-action only. */
+  [data-mobile-nav="frame"] [data-gitgraph-chip-anchor] [data-gitgraph-chip] {
+    touch-action: manipulation !important;
+  }
+
+  /* ---------- dsh-meme 表情选择卡片：右缘安全距离 ----------
+     The meme picker (conversation.input.overlay, id meme-picker) is
+     absolutely positioned left:0 inside the composer's overlay anchor with
+     width:min(360px,90vw). That 90vw resolves against the VIEWPORT, not the
+     anchor, and with the picker's own padding+border the border-box
+     (377px on a 390px phone) exceeds the 356px anchor — the card's right
+     edge then runs past the anchor and off the right screen edge, while the
+     left edge keeps the anchor's 17px safe inset. Stretch the card to the
+     anchor on both sides (left/right 0, width auto, border-box) so the
+     right gap mirrors the left; cap at the card's original border-box size
+     (360px content + 24px padding + 2px border) so tablets keep the
+     intended card width instead of stretching. Desktop is untouched: the
+     frame marker only exists below 1024px. */
+  [data-mobile-nav="frame"] .meme-picker {
+    left: 0 !important;
+    right: 0 !important;
+    width: auto !important;
+    box-sizing: border-box !important;
+    max-width: 386px !important;
+  }
+
+  /* dsh-meme 网格缩略图：自适应铺满卡片,保留 8px 间隙。
+     dsh-meme 的 .mp-grid 是 flex-wrap + 固定 76px 的 .mp-cell(行内 style 再压到 74px):
+     3 列(390px 手机)时每行右侧剩 ~78px 空白,卡片没有铺满。换成响应式 grid:
+     repeat(auto-fill, minmax(64px,1fr)) 让列数随可用宽度伸缩、卡片 width:100% +
+     aspect-ratio:1 随轨道自适应(方形,cover 裁切不变),gap 仍是 dsh-meme 的 8px。
+     行内 width/height 用 !important 覆盖;手机端约 4 列、平板端约 5 列,均满宽。 */
+  [data-mobile-nav="frame"] .meme-picker .mp-grid {
+    display: grid !important;
+    grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)) !important;
+    scrollbar-width: thin !important;
+    scrollbar-color: var(--dsw-alias-label-tertiary, rgba(0, 0, 0, .3)) transparent !important;
+  }
+  [data-mobile-nav="frame"] .meme-picker .mp-cell {
+    width: 100% !important;
+    height: auto !important;
+    aspect-ratio: 1 !important;
+  }
+  /* dsh-meme 网格右侧滚动条：默认 WebKit 滚动条在手机上看太粗,压成 4px
+     细条——保留滚动指示又不占横向空间,thumb 圆角浅色、轨道透明。 */
+  [data-mobile-nav="frame"] .meme-picker .mp-grid::-webkit-scrollbar {
+    width: 4px !important;
+  }
+  [data-mobile-nav="frame"] .meme-picker .mp-grid::-webkit-scrollbar-thumb {
+    background: var(--dsw-alias-label-tertiary, rgba(0, 0, 0, .3)) !important;
+    border-radius: 999px !important;
+  }
+  [data-mobile-nav="frame"] .meme-picker .mp-grid::-webkit-scrollbar-track {
+    background: transparent !important;
+  }
+
+  /* ---------- agent preset 模式选择菜单：手机端紧凑底部弹层 ----------
+     The official agent-preset menu (role=menu, portal mounted on body) uses
+     position:fixed + max-height:820px + bottom:12px, so on a phone it
+     stretches from the trigger down to 12px above the screen bottom —
+     effectively filling the screen. Turn it into a polished bottom sheet:
+     cap the height, center it horizontally (the official max-width 360px
+     left-anchors at left:12px, leaving 12/18px asymmetric gaps), add a
+     drag-handle affordance, breathing room, and softer top radius; the
+     inner viewport keeps scrolling. Scoped to the agent-preset item class
+     (cubgiG_*) so other role=menu dropdowns (model/access mode) are
+     untouched. Desktop ≥1024px is outside the media query, so it keeps the
+     official large dropdown. */
+  /* agent-preset 菜单依赖 @deepseek-ai/dsh-client-ui-agent-preset 的 CSS Module 哈希 (cubgiG_*)，升级该包时需验证此选择器是否仍有效 */
+  [role="menu"]:has([class*="cubgiG_item"]) {
+    top: auto !important;
+    left: 50% !important;
+    right: auto !important;
+    bottom: 12px !important;
+    transform: translateX(-50%) !important;
+    width: min(100% - 24px, 360px) !important;
+    max-width: 360px !important;
+    max-height: min(55dvh, 440px) !important;
+    padding: 30px 6px 10px !important;
+    border-radius: 16px !important;
+  }
+  [role="menu"]:has([class*="cubgiG_item"])::before {
+    content: '';
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 36px;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--dsw-alias-border-l2, rgba(0, 0, 0, .22)) !important;
+    pointer-events: none;
+  }
+  /* 菜单内部滚动条：默认 WebKit 滚动条在竖屏太粗,会占 ~15px 宽度把文字描述
+     挤窄,导致描述换行/截断不自然。压成 4px 细条(与表情网格一致),文字区域
+     恢复自适应宽度。 */
+  [role="menu"]:has([class*="cubgiG_item"]) [class*="_viewport_"] {
+    scrollbar-width: thin !important;
+    scrollbar-color: var(--dsw-alias-label-tertiary, rgba(0, 0, 0, .3)) transparent !important;
+  }
+  [role="menu"]:has([class*="cubgiG_item"]) [class*="_viewport_"]::-webkit-scrollbar {
+    width: 4px !important;
+  }
+  [role="menu"]:has([class*="cubgiG_item"]) [class*="_viewport_"]::-webkit-scrollbar-thumb {
+    background: var(--dsw-alias-label-tertiary, rgba(0, 0, 0, .3)) !important;
+    border-radius: 999px !important;
+  }
+  [role="menu"]:has([class*="cubgiG_item"]) [class*="_viewport_"]::-webkit-scrollbar-track {
+    background: transparent !important;
   }
 
   /* ---------- dsh-meme 表情选择卡片：右缘安全距离 ----------
@@ -672,50 +858,185 @@ export const COMPAT_CSS = `@media (max-width: 1023px) {
 
 
 /* ===== 已安装列表：路径单行截断 ===== */
-[class*="irow"] > div > [class*="spec"] {
+[class*="irow"]:not([class*="irowActions"]):not([class*="irowTrailing"]) > div > [class*="spec"] {
   white-space: nowrap !important;
   overflow: hidden !important;
   text-overflow: ellipsis !important;
   max-width: 100% !important;
   font-size: 12px !important;
 }
-[class*="irow"] > div > [class*="nm"] {
+[class*="irow"]:not([class*="irowActions"]):not([class*="irowTrailing"]) > div > [class*="nm"] {
   white-space: nowrap !important;
   overflow: hidden !important;
   text-overflow: ellipsis !important;
   max-width: 100% !important;
 }
 /* ===== 已安装列表：手机端纵向重排 ===== */
-@media (max-width: 1023px) {
-  [class*="irow"] {
+@media (max-width: 1023px) and (pointer: coarse) {
+  [class*="irow"]:not([class*="irowActions"]):not([class*="irowTrailing"]) {
     flex-wrap: wrap !important;
     align-items: center !important;
     gap: 4px 10px !important;
   }
-  [class*="irow"] > div:first-child {
+  [class*="irow"]:not([class*="irowActions"]):not([class*="irowTrailing"]) > div:first-child {
     flex: 1 1 100% !important;
     max-width: 100% !important;
     min-width: 0 !important;
   }
-  [class*="irow"] > [class*="grow"] {
+  [class*="irow"]:not([class*="irowActions"]):not([class*="irowTrailing"]) > [class*="grow"] {
     flex: 1 1 auto !important;
   }
-  [class*="irow"] > button {
+  [class*="irow"]:not([class*="irowActions"]):not([class*="irowTrailing"]) > button {
     flex: 0 0 auto !important;
   }
-  [class*="irow"] > button[class*="switch"] {
+  [class*="irow"]:not([class*="irowActions"]):not([class*="irowTrailing"]) > button[class*="switch"] {
     order: 3 !important;
   }
-  [class*="irow"] > button:not([class*="switch"]) {
+  [class*="irow"]:not([class*="irowActions"]):not([class*="irowTrailing"]) > button:not([class*="switch"]) {
     order: 2 !important;
   }
-  [class*="irow"] > [class*="owner"] {
+  [class*="irow"]:not([class*="irowActions"]):not([class*="irowTrailing"]) > [class*="owner"] {
     order: 1 !important;
   }
-  [class*="irow"] > [class*="grow"] {
+  [class*="irow"]:not([class*="irowActions"]):not([class*="irowTrailing"]) > [class*="grow"] {
     order: 0 !important;
   }
 }
+/* ===== 市场卡片图片容器：横向滚动 ===== */
+[data-mobile-nav="frame"] [class*="cardShots"] {
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  overflow-x: auto !important;
+  -webkit-overflow-scrolling: touch !important;
+  scrollbar-width: thin !important;
+  min-width: 0 !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  gap: 8px !important;
+  padding: 4px 0 !important;
+}
+[data-mobile-nav="frame"] [class*="cardShots"] > [class*="cardShot"] {
+  flex: 0 0 min(100%, 420px) !important;
+  width: min(100%, 420px) !important;
+  max-width: 100% !important;
+  height: auto !important;
+  display: block !important;
+  object-fit: contain !important;
+}
+[data-mobile-nav="frame"] [class*="cardShots"]::-webkit-scrollbar {
+  height: 4px !important;
+}
+[data-mobile-nav="frame"] [class*="cardShots"]::-webkit-scrollbar-thumb {
+  background: var(--ds-border-color, #ccc) !important;
+  border-radius: 4px !important;
+}
+
+  /* ---------- dsh-file-viewer (conversation.view tab「文件查看器」) ----------
+     The plugin ships NO responsive CSS: its min-width:0 flex panels overflow
+     on a phone — the titlebar caps the path at 520px beside a 5-button action
+     row, and CSV/code headers row-stick inside content scrollers. It renders
+     inline into the conversation view region (stable 'dsfv-*' prefix, injected
+     <style>), not a modal sheet, so the fixes here are: stop the PANEL from
+     scrolling horizontally (leave horizontal scrolling inside the content
+     scrollers), compress the titlebar/statusbar, enlarge touch targets, and
+     scope everything under [data-file-viewer-open] so only the active
+     file-viewer tab is affected. The marker is owned by the
+     file-viewer-open-marker reconciler task; nothing leaks to desktop because
+     this whole block lives inside the mobile media query.
+     (Port of community fork fix 2ff7976.) */
+
+  [data-mobile-nav="frame"][data-file-viewer-open] .dsfv-panel {
+    min-width: 0 !important;
+    max-width: 100% !important;
+    overflow-x: hidden !important;
+  }
+  /* Titlebar: single compact row; path truncates, secondary meta hides on
+     narrow, the 5-button action row wraps to two rows of tall targets. */
+  [data-mobile-nav="frame"][data-file-viewer-open] .dsfv-titlebar {
+    gap: 4px !important;
+    padding: 6px 8px !important;
+    flex-wrap: nowrap !important;
+    min-width: 0 !important;
+  }
+  [data-mobile-nav="frame"][data-file-viewer-open] .dsfv-titlebar-path {
+    min-width: 0 !important;
+    padding-right: 4px !important;
+  }
+  [data-mobile-nav="frame"][data-file-viewer-open] .dsfv-path {
+    font-size: 13px !important;
+    min-width: 0 !important;
+    max-width: 220px !important;
+  }
+  [data-mobile-nav="frame"][data-file-viewer-open] .dsfv-titlebar-actions {
+    flex-wrap: wrap !important;
+    gap: 4px !important;
+    justify-content: flex-end !important;
+    margin-left: auto !important;
+  }
+  [data-mobile-nav="frame"][data-file-viewer-open] .dsfv-toolbar-btn {
+    min-height: 34px !important;
+    padding: 0 10px !important;
+    font-size: 13px !important;
+  }
+  [data-mobile-nav="frame"][data-file-viewer-open] .dsfv-icon-btn,
+  [data-mobile-nav="frame"][data-file-viewer-open] .dsfv-back-btn {
+    min-height: 34px !important;
+    min-width: 34px !important;
+  }
+  @media (max-width: 480px) {
+    [data-mobile-nav="frame"][data-file-viewer-open] .dsfv-meta {
+      display: none !important;
+    }
+  }
+  /* Status bar: wrap, safe-area bottom padding, compact. */
+  [data-mobile-nav="frame"][data-file-viewer-open] .dsfv-statusbar {
+    flex-wrap: wrap !important;
+    gap: 4px 10px !important;
+    padding: 4px 8px calc(4px + env(safe-area-inset-bottom, 0px)) !important;
+    font-size: 12px !important;
+  }
+  /* Content scrollers must own horizontal scrolling; the flex columns and the
+     renderer stack must not let content push the panel wide. */
+  [data-mobile-nav="frame"][data-file-viewer-open] .dsfv-renderer,
+  [data-mobile-nav="frame"][data-file-viewer-open] .dsfv-renderer-stack,
+  [data-mobile-nav="frame"][data-file-viewer-open] .dsfv-scroll,
+  [data-mobile-nav="frame"][data-file-viewer-open] .dsfv-csv-scroll,
+  [data-mobile-nav="frame"][data-file-viewer-open] .dsfv-code-body {
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+  [data-mobile-nav="frame"][data-file-viewer-open] .dsfv-scroll,
+  [data-mobile-nav="frame"][data-file-viewer-open] .dsfv-csv-scroll {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+  /* Browser / subtoolbar rows wrap; file rows get touch-friendly height. */
+  [data-mobile-nav="frame"][data-file-viewer-open] .dsfv-browser-nav,
+  [data-mobile-nav="frame"][data-file-viewer-open] .dsfv-subtoolbar {
+    flex-wrap: wrap !important;
+    gap: 6px !important;
+    padding: 4px 8px !important;
+  }
+  [data-mobile-nav="frame"][data-file-viewer-open] .dsfv-file-row {
+    min-height: 44px !important;
+    padding: 8px 10px !important;
+  }
+  [data-mobile-nav="frame"][data-file-viewer-open] .dsfv-file-list [class*="name"] {
+    min-width: 0 !important;
+  }
+  /* Produced-file chips render in the conversation tail, outside the viewer
+     tab — keep tappable but not scoped to the marker. */
+  [data-mobile-nav="frame"] .dsfv-produced-chip,
+  [data-mobile-nav="frame"] .dsfv-produced-folder {
+    min-height: 40px !important;
+    padding: 0 12px !important;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    [data-mobile-nav="frame"][data-file-viewer-open] [class*="dsfv-"] {
+      transition: none !important;
+      animation: none !important;
+    }
+  }
 }
 
 `

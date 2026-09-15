@@ -2,8 +2,9 @@ import type { ReconcilerTask } from '../core/reconciler-core.ts'
 
 // The official conversation status row (turns / steps / LLM time / TTFT /
 // cache) has a hashed class, so the stylesheet cannot target it directly.
-// Mark the exact row on narrow screens by text: a [class$=_root] that
-// carries the metrics text and no textarea (the composer card also ends in
+// Mark the exact row on narrow screens by text: a [class*=_root] that
+// carries the metrics text and no composer input (textarea or the
+// data-composer-input Lexical node; the composer card also ends in
 // _root and can mention turns in its model line). The CSS then lays the
 // marked row out as ONE horizontally scrolling line with every metric
 // reachable.
@@ -137,6 +138,14 @@ function compactStats(stats: Element): void {
   }
 }
 
+// Fast-path predicate: is the previously marked strip still alive in place?
+// Re-verifying one anchor per flush is O(1); the full-tree hunt in mark()
+// grows with the conversation and runs on every streaming token.
+export function statsAnchorAlive(el: Element | null): boolean {
+  if (el === null || !el.isConnected) return false
+  if (el.closest('[data-phase]') === null) return false
+  return el.closest('[class*="_composerStack"]') !== null
+}
 export function createStatsLineTask(): ReconcilerTask {
   // The composer root renders the TPS readout ("TPS 89.4 tok/s") as its
   // own row BELOW the status strip; fold it into the strip so every
@@ -149,7 +158,7 @@ export function createStatsLineTask(): ReconcilerTask {
   let tpsOrigin: { parent: Node; next: Node | null } | null = null
   const moveTps = (stats: Element): void => {
     if ([...stats.children].some((c) => /^TPS\s+\d/.test((c.textContent ?? '').trim()))) return
-    const stack = stats.closest('[class$="_composerStack"]')
+    const stack = stats.closest('[class*="_composerStack"]')
     if (stack === null) return
     for (const el of stack.querySelectorAll('div')) {
       const text = (el.textContent ?? '').trim()
@@ -166,10 +175,22 @@ export function createStatsLineTask(): ReconcilerTask {
     }
   }
   const mark = (): void => {
+    // Fast path: the marked strip usually survives React rebuilds between
+    // tokens; re-verifying the anchor is O(1) while the full-tree hunt below
+    // grows with the conversation. moveTps still re-runs so a rebuilt TPS
+    // readout is re-folded.
+    const anchor = document.querySelector('[data-mobile-nav="stats"]')
+    if (anchor !== null && statsAnchorAlive(anchor)) {
+      moveTps(anchor)
+      return
+    }
+    // Stale marker on a node that left the composer stack/phase context:
+    // drop it so the slow path can re-anchor cleanly.
+    anchor?.removeAttribute('data-mobile-nav')
     for (const root of document.querySelectorAll('[data-phase] [class*="_root"]')) {
       // The status row lives inside the composer stack; message-area
       // blocks can also mention turns/steps and must be skipped.
-      if (root.closest('[class$="_composerStack"]') === null) continue
+      if (root.closest('[class*="_composerStack"]') === null) continue
       // The todo plan strip also lives in the composer stack and its root
       // ends in _root. Its items may legitimately contain "步"/"steps" in
       // their text, so never mistake it (or any interactive dock panel)
@@ -178,7 +199,10 @@ export function createStatsLineTask(): ReconcilerTask {
       if (root.querySelector('button') !== null) continue
       const text = root.textContent ?? ''
       if (!/(turns|steps|\bLLM\b|轮|步)/.test(text)) continue
-      if (root.querySelector('textarea') !== null) continue
+      // Composer card must never be mistaken for the status strip; exclude
+      // its input region across both composer DOMs (textarea / Lexical
+      // contentEditable marked data-composer-input).
+      if (root.querySelector('textarea, [data-composer-input]') !== null) continue
       root.setAttribute('data-mobile-nav', 'stats')
       moveTps(root)
       compactStats(root)

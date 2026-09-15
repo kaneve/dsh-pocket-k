@@ -1,6 +1,6 @@
 // dsh-pocket-k 网页客户端：
 //   1. 设置页签「手机访问」（局域网/公网二维码 + 更新/重启提示）
-//   2. 移动端适配（移植自本地 fork dsh-web-mobile v2.0.0，upstream mexiaosqwq/dsh-web-mobile，MIT；见 client/mobile/LICENSE.dsh-web-mobile）
+//   2. 移动端适配（移植自 upstream mexiaosqwq/dsh-web-mobile v2.4.1，MIT；本地定制见 client/mobile/VENDORED_FROM 与 LICENSE.dsh-web-mobile）
 //
 // 手机扫码打开的就是电脑上的 dsh web，实时同步；窄屏自动变成抽屉布局。
 //

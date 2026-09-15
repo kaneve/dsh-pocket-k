@@ -167,7 +167,10 @@ const buildStatsRoot = (groups, { withTps = false } = {}) => {
   return root
 }
 const runTwice = (root) => {
-  globalThis.document = { querySelectorAll: () => [root] }
+  // Upstream v2.4.1's fast path probes document.querySelector('[data-mobile-nav="stats"]')
+  // before the full-tree scan; the fake DOM carries no marker, so it falls through to
+  // the scan these assertions cover.
+  globalThis.document = { querySelector: () => null, querySelectorAll: () => [root] }
   const task = createStatsLineTask()
   task.ensure()
   const first = root.textContent

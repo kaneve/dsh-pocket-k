@@ -1,15 +1,37 @@
 // layout — split from src/client/mobile.css.ts (2026-08-16), order preserved.
 // Self-contained: the mobile media query opens and closes in this file.
 
-export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
+export const LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touch-primary pointer) ---------- */
 
-@media (max-width: 1023px) {
+@media (max-width: 1023px) and (pointer: coarse) {
   /* --- Phone chrome ---
-     The system status bar stays visible (no fullscreen). Two adjustments
+     The system status bar stays visible (no fullscreen). Three adjustments
      make it behave:
-     - touch-action: manipulation kills double-tap-to-zoom (and the 300ms
-       tap delay) while keeping pan and pinch zoom; the client also
-       suppresses legacy-iOS gesturestart as a fallback.
+     - touch-action: pan-y pinch-zoom kills double-tap-to-zoom (and the 300ms
+       tap delay) while keeping vertical pan. Omitting pan-x (i.e. not using
+       the manipulation alias) forbids HORIZONTAL pan on the root: a
+       left-edge horizontal drag would otherwise be claimed by the browser as
+       a pan (firing pointercancel) before the sidebar swipe layer can
+       classify it. touch-action does not inherit and the behavior
+       intersection stops at the first scroll container, so only touches
+       landing directly on the root background are affected — inner
+       horizontal scrolling of content containers is untouched. pinch-zoom is
+       listed on purpose (#45): a bare pan-y also drops pinch, and then a
+       zoom the browser applied by itself — iOS enlarges the viewport when a
+       field under 16px takes focus — can no longer be undone by the user,
+       so the app stays magnified until it is reopened or rotated. Two-finger
+       zoom is also the WCAG 1.4.4 escape hatch and costs the gesture layer
+       nothing: pinch is not a horizontal pan.
+     - overscroll-behavior-x: none suppresses the browser's edge history
+       navigation on the root scroller — Android Chrome claims a horizontal
+       stroke that STARTS within its edge band (EDGE_WIDTH_DP=48dp,
+       NavigationHandler.java) and navigates BACK, the exact gesture that
+       opens the drawer ("页面直接返回上一页", 2026-08-29 user report). Only
+       html/body count for this (Chromium issue 41483088: inner containers
+       are ignored by the navigation path). iOS Safari's edge back-swipe has
+       no CSS opt-out (WebKit bug 240183) — there the widened gesture start
+       zone (96px, beyond every browser's edge-claim strip) is the
+       mitigation.
      - With the client's viewport-fit=cover, env(safe-area-inset-top) is the
        status bar / notch height; the rules below push the app content below
        it so the status bar never covers anything. Off notched phones (or in
@@ -17,7 +39,8 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
        status bar) the inset is 0 and nothing shifts. */
   html,
   body {
-    touch-action: manipulation !important;
+    touch-action: pan-y pinch-zoom !important;
+    overscroll-behavior-x: none !important;
   }
 
   /* AppFrame: the drawer takes the sidebar column out of grid flow, so the
@@ -25,8 +48,20 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
      center every pixel and keep the details track at zero. The top padding
      clears the status bar / notch for every in-flow surface (session header,
      messages, composer); the absolutely-positioned drawer is unaffected (its
-     containing block is the frame's padding box, i.e. still the frame top). */
+     containing block is the frame's padding box, i.e. still the frame top).
+     box-sizing MUST be border-box: the official frame is height:100% of a
+     100%-height body, and it is content-box by default, so the safe-area
+     padding is ADDED on top of the full viewport height. The frame then grows
+     to 100% + inset, the document itself becomes scrollable by exactly the
+     inset, and the sticky composer seat (bottom:0 of the scroll body) lands
+     below the visual viewport. Symptoms on a notched phone: the whole UI can
+     be swiped up, the composer lifts off the bottom leaving a blank strip,
+     and the newest message sits under the composer because the host's
+     at-bottom follow scrolls its own scroll body, not the document. With
+     border-box the padding is taken out of the 100% height instead, so the
+     frame is exactly one viewport tall and the document never scrolls. */
   [data-mobile-nav="frame"] {
+    box-sizing: border-box !important;
     position: relative !important;
     grid-template-columns: minmax(0, 1fr) 0 0 !important;
     padding-top: env(safe-area-inset-top, 0px) !important;
@@ -79,6 +114,31 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
     transform: none !important;
   }
 
+  /* Drawer swipe gestures (edge swipe-in / content swipe-out, see
+     docs/specs/2026-08-27-sidebar-swipe-gestures.md).
+     One rule is load-bearing for the gesture layer: dropping pan-x on the
+     drawer lets horizontal pointermove events reach the gesture code —
+     WITHOUT it the browser treats a horizontal stroke as a pan, fires
+     pointercancel and the gesture never classifies (vertical panning stays
+     intact). Start-hit is decided purely by geometry on the document
+     capture listener (START_ZONE_PX = 48px); there is no hotspot element
+     (removed per audit C2, 2026-08-27). pinch-zoom rides along with the
+     root value so a browser-applied zoom stays undoable inside the drawer
+     too (#45); touch-action intersects down the ancestor chain, so a bare
+     pan-y here would cancel the root's pinch permission. */
+  [data-mobile-nav="frame"] > :first-child {
+    touch-action: pan-y pinch-zoom !important;
+  }
+
+  /* prefers-reduced-motion: the drawer's .28s slide is motion; drop it
+     (audit S2 2026-08-27 — the old reduce block only covered the settings
+     sheet and its mask). Same idiom as the animation:none blocks below. */
+  @media (prefers-reduced-motion: reduce) {
+    [data-mobile-nav="frame"] > :first-child {
+      transition: none !important;
+    }
+  }
+
   /* Drag handles are useless on touch and would float over the drawer. */
   [data-side="sidebar"],
   [data-side="details"] {
@@ -89,30 +149,32 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
      The official message flow keeps desktop's 32px side gutters and 16px
      type. On a phone: shrink the type a notch and widen the lines by
      trimming the gutters (the sidebar drawer list keeps its size). The
-     flow's scroll container is the only _scroll element holding markdown
-     <p> paragraphs — the composer's own scroll (textarea) is excluded
-     via :has(p). */
+     flow's scroll container holds the markdown <p> paragraphs; since
+     DSH 0.1.2-rc.1 the composer is a Lexical contenteditable that also
+     renders real <p> paragraphs inside its own _scroll container, so the
+     composer must be excluded explicitly via
+     :not(:has([data-composer-input])). */
   /* The official main scroll body reserves scrollbar-gutter for desktop
      scrollbars (8px), which shoves every column off-center on a phone.
      Classic desktop scrollbars (Edge/Chrome) also occupy ~8-17px in a
      phone-sized viewport, shifting the column further. Mobile scrolling
      is touch/wheel, so remove the scrollbar entirely on phones: the
      column is then exactly centered in every browser. */
-  [data-phase] [class$="_scrollBody"] {
+  [data-phase] [class*="_scrollBody"] {
     scrollbar-gutter: auto !important;
     scrollbar-width: none;
   }
-  [data-phase] [class$="_scrollBody"]::-webkit-scrollbar {
+  [data-phase] [class*="_scrollBody"]::-webkit-scrollbar {
     display: none !important;
     width: 0;
     height: 0;
   }
   /* Message action rows (copy / run-time badges) can overflow the right
      edge on narrow screens — keep them inside the message width. */
-  [data-phase] [class$="_actions"] {
+  [data-phase] [class*="_actions"] {
     overflow: hidden;
   }
-  [data-phase] [class$="_actions"] [class$="_timeEnd"] {
+  [data-phase] [class*="_actions"] [class*="_timeEnd"] {
     flex: 0 1 auto;
     min-width: 0;
     overflow: hidden;
@@ -120,7 +182,31 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
     white-space: nowrap !important;
   }
 
-  [data-phase] [class$="_scroll"]:has(p) {
+  /* Message tooltip bubbles (copy / feedback labels, message-row hover
+     bubbles) are redundant on touch: the icon already flips to a checkmark.
+     Suppress only inside the actions row — the fork's original scope. On
+     this host (0.1.1-rc.2) NO tooltip renders as a visible bubble: the copy
+     label is a visuallyHidden span and no client-ui package emits
+     role="tooltip". The user message bubble (gdEzaW_bubble) and the goal
+     bubble (oRe1gG_bubble) live in _userStack/_row, NOT in _actions — the
+     previously unscoped selector hid every user message on touch devices
+     (2026-09-06 live regression). role="tooltip" stays globally suppressed:
+     genuine ARIA tooltips are exactly what the sticky-residue fix targets,
+     and nothing legitimate carries the role today. The actions-row arm
+     re-activates by itself when a host version renders tooltip labels
+     inline in the actions row (DSH 0.1.2 shape). */
+  @media (hover: none), (pointer: coarse) {
+    [data-phase] [role="tooltip"],
+    [data-phase] [class*="_actions"] [class*="_bubble"] {
+      display: none !important;
+      visibility: hidden !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
+  }
+
+  [data-phase]
+    [class*="_scroll"]:not([class*="_scrollBody"]):not(:has([data-composer-input])):has(p) {
     padding-left: 20px;
     padding-right: 20px;
     font-size: 15px !important;
@@ -129,9 +215,14 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
      list items, so the container's inherited 15px is not enough. User
      messages render their text in a div whose class carries _text_
      (16px too) — cover it as well. */
-  [data-phase] [class$="_scroll"]:has(p) p,
-  [data-phase] [class$="_scroll"]:has(p) li,
-  [data-phase] [class$="_scroll"]:has(p) [class*="_text_"] {
+  [data-phase]
+    [class*="_scroll"]:not([class*="_scrollBody"]):not(:has([data-composer-input])):has(p) p,
+  [data-phase]
+    [class*="_scroll"]:not([class*="_scrollBody"]):not(:has([data-composer-input])):has(p) li,
+  [data-phase]
+    [class*="_scroll"]:not([class*="_scrollBody"]):not(:has([data-composer-input])):has(p) [
+      class*="_text_"
+    ] {
     font-size: 15px !important;
   }
 
@@ -149,12 +240,28 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
     min-width: 0;
   }
 
+  /* Markdown images: the official rule often forces width:100%, which
+     upscales small square images to the full message column. Show small
+     images at their intrinsic size; large / very wide images still scale
+     down to fit the column (max-width:100% keeps horizontal panoramas
+     adaptive without overflowing). */
+  [data-phase] [class*="_scroll"]:not([class*="_scrollBody"]) img {
+    width: auto !important;
+    max-width: 100% !important;
+    height: auto !important;
+    /* Cap square / tall images so a big sticker does not dominate the
+       narrow column; landscape images stay governed by max-width only.
+       The plain px line is the fallback for engines without dvh. */
+    max-height: 220px !important;
+    max-height: min(40dvh, 220px) !important;
+  }
+
   /* User bubbles: the official stack is capped at min(525px, 82%), which on a
      phone leaves a large blank strip on the left and pushes the bubble high.
      On mobile let the user message fill the same full width as assistant
      messages (the bubble background then spans the whole message column). */
-  [data-phase] [class$="_userStack"],
-  [data-phase] [class$="_userStack"] [class$="_bubble"] {
+  [data-phase] [class*="_userStack"],
+  [data-phase] [class*="_userStack"] [class*="_bubble"] {
     box-sizing: border-box;
     width: fit-content;
     max-width: 100%;
@@ -167,20 +274,7 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
      model selector on narrow phones. Keep fixed hit targets fixed, but let
      text-bearing controls shrink and ellipsize before they paint over the
      trailing lane. */
-  /* :has()-free fallback (older Android WebView / iOS Safari <15.4, which
-     also lack container queries): without it the composer action row is
-     completely unstyled — model selector / context / send button lose
-     their right-aligned lane. Modern browsers match the more specific
-     :has() rules below, which override this baseline. */
-  [data-phase] [class*="_card"] [class$="_trailing"] {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    margin-left: auto;
-    min-width: 0;
-    gap: 6px;
-  }
-  [data-phase] [class*="_card"]:has(textarea) [class$="_row"]:has([class$="_trailing"]) {
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) {
     box-sizing: border-box;
     container-type: inline-size;
     container-name: dsh-mobile-composer;
@@ -193,7 +287,18 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
        overflow clipping, so the row itself can stay visible. */
     overflow: visible;
   }
-  [data-phase] [class*="_card"]:has(textarea) [class$="_row"]:has([class$="_trailing"]) > :first-child {
+  /* Dual-primary form (subagent view: stop + send). The four-control
+     cluster [model][meter][stop][send] overflows the single-row lane the
+     nowrap rule above enforces; the model pill is the only shrinkable
+     item, so it collapses to zero and the fixed trio loses its auto
+     margin (all hug the lane's left edge, send may even paint off-view).
+     Restore the official wrap for this form only: the trailing lane
+     drops to a second full-width row where the four controls always
+     fit. Main-session three-control form keeps single-row layout. */
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]):has([class*="_primary"] ~ [class*="_primary"]) {
+    flex-wrap: wrap;
+  }
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > :first-child {
     flex: 0 1 auto;
     min-width: 0;
     gap: 6px;
@@ -202,7 +307,7 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
        ellipsis is handled by the trigger label itself. */
     overflow: visible;
   }
-  [data-phase] [class*="_card"]:has(textarea) [class$="_row"]:has([class$="_trailing"]) > [class$="_trailing"] {
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > [class*="_trailing"] {
     flex: 1 1 auto;
     min-width: 0;
     gap: 6px;
@@ -212,7 +317,7 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
   /* PermissionSelect / plan controls share the tools lane. Let the
      permission label use the remaining tools width, while the lower-priority
      plan slot keeps an icon-sized target instead of stealing model width. */
-  [data-phase] [class*="_card"]:has(textarea) [class$="_row"]:has([class$="_trailing"]) > :first-child > :nth-child(2) {
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > :first-child > :nth-child(2) {
     flex: 0 1 auto;
     min-width: 0;
     max-width: none;
@@ -221,14 +326,14 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
        overflow hidden crops it. The trigger label clips its own text. */
     overflow: visible;
   }
-  [data-phase] [class*="_card"]:has(textarea) [class$="_row"]:has([class$="_trailing"]) > :first-child > :nth-child(2) > [class$="_trigger"] {
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > :first-child > :nth-child(2) > [class*="_trigger"] {
     flex: 1 1 auto;
     min-width: 28px;
     max-width: 100%;
     display: flex !important;
     overflow: hidden;
   }
-  [data-phase] [class*="_card"]:has(textarea) [class$="_row"]:has([class$="_trailing"]) > :first-child > :nth-child(2) > [class$="_trigger"] > [class$="_triggerLabel"] {
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > :first-child > :nth-child(2) > [class*="_trigger"] > [class*="_triggerLabel"] {
     flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
@@ -239,57 +344,57 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
      not force them into an icon-sized box: their child button would overflow
      that wrapper and paint over PermissionSelect. Keep the wrapper intrinsic;
      the model lane below is the one that sacrifices width. */
-  [data-phase] [class*="_card"]:has(textarea) [class$="_row"]:has([class$="_trailing"]) > :first-child > :nth-child(2) > :not([class$="_trigger"]) {
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > :first-child > :nth-child(2) > :not([class*="_trigger"]) {
     flex: 0 1 auto;
     min-width: 34px;
     max-width: max-content;
     overflow: visible;
   }
-  [data-phase] [class*="_card"]:has(textarea) [class$="_row"]:has([class$="_trailing"]) > :first-child > :nth-child(2) > [class$="_wrap"] > [class$="_chip"] {
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > :first-child > :nth-child(2) > [class*="_wrap"] > [class*="_chip"] {
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap !important;
   }
   @container dsh-mobile-composer (max-width: 359px) {
-    [data-phase] [class*="_card"]:has(textarea) [class$="_row"]:has([class$="_trailing"]) > :first-child > :nth-child(2) > [class$="_trigger"] > [class$="_triggerLabel"] {
+    [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > :first-child > :nth-child(2) > [class*="_trigger"] > [class*="_triggerLabel"] {
       display: none !important;
     }
   }
   /* Model selector: flexible and shrinkable, but never clipped.
      The root must be overflow:visible so the dropdown menu can render.
      The trigger itself clips the label text. */
-  [data-phase] [class*="_card"]:has(textarea) [class$="_root"]:has(> [class$="_trigger"][aria-haspopup="menu"]) {
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_root"]:has(> [class*="_trigger"][aria-haspopup="menu"]) {
     flex: 0 1 auto;
     min-width: 0;
     overflow: visible;
   }
   @container dsh-mobile-composer (max-width: 359px) {
-    [data-phase] [class*="_card"]:has(textarea) [class$="_root"]:has(> [class$="_trigger"][aria-haspopup="menu"]) {
+    [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_root"]:has(> [class*="_trigger"][aria-haspopup="menu"]) {
       flex-basis: auto;
     }
   }
-  [data-phase] [class*="_card"]:has(textarea) [class$="_root"]:has(> [class$="_trigger"][aria-haspopup="menu"]) > [class$="_trigger"] {
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_root"]:has(> [class*="_trigger"][aria-haspopup="menu"]) > [class*="_trigger"] {
     display: flex !important;
     width: 100%;
     max-width: 100%;
     min-width: 0;
     overflow: hidden;
   }
-  [data-phase] [class*="_card"]:has(textarea) [class$="_root"]:has(> [class$="_trigger"][aria-haspopup="menu"]) > [class$="_trigger"] > [class$="_triggerLabel"] {
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_root"]:has(> [class*="_trigger"][aria-haspopup="menu"]) > [class*="_trigger"] > [class*="_triggerLabel"] {
     flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap !important;
   }
-  [data-phase] [class*="_card"]:has(textarea) [class$="_root"]:has(> [class$="_trigger"]):not(:has(> [class$="_trigger"][aria-haspopup="menu"])) {
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_root"]:has(> [class*="_trigger"]):not(:has(> [class*="_trigger"][aria-haspopup="menu"])) {
     flex: 0 0 auto;
   }
 
   /* Model switcher menu: center the dropdown on the now-shrinkable trigger,
      but never let it exceed the viewport on narrow phones. */
-  [data-phase] [class*="_card"]:has(textarea) [class$="_root"]:has(> [class$="_trigger"]) > [class$="_menu"] {
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_root"]:has(> [class*="_trigger"]) > [class*="_menu"] {
     left: 50% !important;
     right: auto !important;
     transform: translateX(-50%) !important;
@@ -300,14 +405,82 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
   /* --- Fix composer row overflow at narrow widths (320px-360px) ---
      Force every direct child of the tools and trailing lanes to shrink,
      so they can fit within the available space without causing horizontal
-     overflow. */
-  [data-phase] [class*="_card"]:has(textarea) [class$="_row"]:has([class$="_trailing"]) > :first-child > * {
+     overflow. The fixed-size icon buttons are exempt: officially both are
+     flex:none at a fixed size (plus 28x28, send 34x34) and must stay put,
+     not participate in adaptation. */
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > :first-child > :not([class*="_add"]) {
     flex-shrink: 1;
     min-width: 0;
   }
-  [data-phase] [class*="_card"]:has(textarea) [class$="_row"]:has([class$="_trailing"]) > [class$="_trailing"] > * {
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > [class*="_trailing"] > :not([class*="_primary"]) {
     flex-shrink: 1;
     min-width: 0;
+  }
+  /* Pin the plus button at the left edge of the tools lane: official
+     flex:none 28x28, never squeezed by narrower viewports. */
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > :first-child > [class*="_add"] {
+    flex: none;
+  }
+  /* The context meter in the trailing lane is another fixed-size icon
+     control: its trigger is officially width:28px flex:none, but the root
+     itself is shrinkable, so a squeezed root lets the trigger paint over
+     the pinned send button. Keep the whole meter at its natural size; its
+     trigger uses aria-haspopup="dialog", so the model-selector menu rules
+     (keyed on "menu") still do not apply. */
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > [class*="_trailing"] > [class*="_root"] {
+    flex: none;
+    min-width: 0;
+  }
+  /* ContextMeter (JObwrW_ hash family) right-cluster pinning: keep the meter
+     at its official size (28x28 trigger, 14px ring -- enlarging the ring made
+     it steal attention) and glue it to the send button. A small negative
+     right margin trims the 6px lane gap to 2px against send. Anchor on the
+     unique aria-haspopup="dialog" trigger (no other composer control uses
+     it), not the hashed class, so an upstream hash bump cannot silently
+     unhook us. Knob: margin-right trim (-4px). */
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > [class*="_trailing"] > [class*="_root"]:has(> [class*="_trigger"][aria-haspopup="dialog"]) {
+    margin-right: -4px;
+  }
+  /* The model pill joins the same right cluster: its margin-left:auto absorbs
+     ALL trailing slack, so the adaptive void sits between the tools lane and
+     the pill (visible on wide phones/tablets), while [pill][meter][send] stay
+     welded together at the right edge on every width. Descendant combinator
+     on purpose: the pill root sits behind a display:contents wrapper, so a
+     direct-child combinator silently misses (probe-verified). Within the
+     trailing lane aria-haspopup="menu" belongs to the model trigger alone. */
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > [class*="_trailing"] [class*="_root"]:has(> [class*="_trigger"][aria-haspopup="menu"]) {
+    margin-left: auto;
+    margin-right: -4px;
+  }
+  /* Shrink only the trigger BOX (28 -> 24, padding zeroed) while the ring
+     ink stays at its official 14px: the dead inset per side drops from 7px
+     to 5px so the small ring no longer floats in its own button. 24x24 keeps
+     the WCAG 2.2 minimum target size. Ring size itself is intentionally
+     untouched -- enlarging it was rejected as attention-grabbing. */
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > [class*="_trailing"] > [class*="_root"]:has(> [class*="_trigger"][aria-haspopup="dialog"]) > [class*="_trigger"] {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+  }
+  /* Slack-absorber priority in the trailing lane: model pill > meter > send.
+     Exactly one element carries margin-left:auto so the adaptive void always
+     sits BEFORE the welded right cluster, never inside it. The meter itself
+     never had an auto before 2026-09-06: in subagent sessions the model seat
+     is officially absent (the parent pins the model), and zeroing the send's
+     auto on the meter's aria-haspopup="dialog" then left NOTHING to absorb
+     slack -- the whole right cluster hugged the lane's left edge (user
+     screenshot). Fix: when no model pill renders, the meter root becomes the
+     absorber, welding [meter][send] at the right edge like the main view's
+     [pill][meter][send]; the send's auto only survives when neither renders. */
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > [class*="_trailing"]:not(:has([class*="_trigger"][aria-haspopup="menu"])) > [class*="_root"]:has(> [class*="_trigger"][aria-haspopup="dialog"]) {
+    margin-left: auto;
+  }
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > [class*="_trailing"] > [class*="_primary"] {
+    flex: none;
+    margin-left: auto;
+  }
+  [data-phase] [class*="_card"]:has(textarea, [data-composer-input]) [class*="_row"]:has([class*="_trailing"]) > [class*="_trailing"]:has([class*="_trigger"][aria-haspopup="menu"], > [class*="_root"] > [class*="_trigger"][aria-haspopup="dialog"]) > [class*="_primary"] {
+    margin-left: 0;
   }
 
   /* --- Session header on mobile ---
@@ -349,7 +522,7 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
     top: auto !important;
     z-index: auto !important;
   }
-  [data-mobile-nav="frame"] [data-phase] header [class$="_headerActions"] {
+  [data-mobile-nav="frame"] [data-phase] header [class*="_headerActions"] {
     display: flex !important;
     align-items: center;
     box-sizing: border-box;
@@ -362,7 +535,7 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
   }
   /* The title takes the remaining width and never paints outside it; the
      metadata lane's mode text is what shrinks first. */
-  [data-mobile-nav="frame"] [data-phase] header [class$="_crumbs"] {
+  [data-mobile-nav="frame"] [data-phase] header [class*="_crumbs"] {
     flex: 1 1 0;
     min-width: 0;
     max-width: none;
@@ -373,7 +546,7 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
   /* Mode label: preserve its icon and scale with the viewport — it yields
      space to the title and subagent status first, but can use more width on
      wider screens up to 220px before ellipsizing. */
-  [data-mobile-nav="frame"] [data-phase] header [class$="_label"]:has(> svg) {
+  [data-mobile-nav="frame"] [data-phase] header [class*="_label"]:has(> svg) {
     order: 1;
     flex: 0 1 auto;
     min-width: 0;
@@ -387,7 +560,7 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
     text-overflow: ellipsis;
     white-space: nowrap !important;
   }
-  [data-mobile-nav="frame"] [data-phase] header [class$="_label"]:has(> svg) > svg {
+  [data-mobile-nav="frame"] [data-phase] header [class*="_label"]:has(> svg) > svg {
     position: absolute !important;
     left: 0 !important;
     top: 50% !important;
@@ -396,11 +569,11 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
   /* Running/subagent controls keep their full status text and hit area; they
      do not give up width to the mode label. NOTE: the real subagent lineage
      root has class="ZKlsPq_root " — a TRAILING SPACE from the plugin's
-     template-literal className — so [class$="_root"] never matches it. Use
+     template-literal className — so [class*="_root"] never matches it. Use
      [class*="_root"] and exclude the switcher root ([class*="_switcherRoot"])
      so only the count/job roots get pinned (the switcher must stay shrinkable
      so its own title can ellipsize). */
-  [data-mobile-nav="frame"] [data-phase] header [class*="_root"]:not([class*="_switcherRoot"]):has(> button[class$="_trigger"]) {
+  [data-mobile-nav="frame"] [data-phase] header [class*="_root"]:not([class*="_switcherRoot"]):has(> button[class*="_trigger"]) {
     order: 2;
     flex: 0 0 auto;
     min-width: max-content;
@@ -408,8 +581,8 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
     white-space: nowrap !important;
     position: static;
   }
-  [data-mobile-nav="frame"] [data-phase] header [class*="_root"]:not([class*="_switcherRoot"]):has(> button[class$="_trigger"]) > button,
-  [data-mobile-nav="frame"] [data-phase] header [class*="_root"]:not([class*="_switcherRoot"]):has(> button[class$="_trigger"]) > button * {
+  [data-mobile-nav="frame"] [data-phase] header [class*="_root"]:not([class*="_switcherRoot"]):has(> button[class*="_trigger"]) > button,
+  [data-mobile-nav="frame"] [data-phase] header [class*="_root"]:not([class*="_switcherRoot"]):has(> button[class*="_trigger"]) > button * {
     white-space: nowrap !important;
   }
   /* The lineage count's leading "/" (ZKlsPq_separator — official desktop
@@ -417,7 +590,7 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
      stray extra breadcrumb level on small screens; hide it. The crumbSep "/"
      between ancestry segments (subagent sessions) is a real separator and
      stays. */
-  [data-mobile-nav="frame"] [data-phase] header [class$="_crumbs"] [class$="_separator"] {
+  [data-mobile-nav="frame"] [data-phase] header [class*="_crumbs"] [class*="_separator"] {
     display: none !important;
   }
   [data-mobile-nav="frame"] [data-phase] header [data-mobile-nav="files"] {
@@ -430,6 +603,41 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
   [data-mobile-nav="frame"] [data-phase] header > :first-child > :last-child {
     display: none !important;
   }
+  /* View tabs strip (official [role="tablist"] under the crumbs row).
+     Desktop ships a single flex row (gap: 36) sized for the two stock tabs
+     (对话/轨迹). Plugins register further views (memory / skill / todo
+     panels, per-plugin settings pages), and once the count passes two the
+     shrinkable buttons collapse to their min-content: CJK labels stack one
+     glyph per line (staircase), latin labels break word-per-line — the
+     strip eats a screenful of vertical space (#41, 8 tabs, HarmonyOS
+     browser). Scroll the strip horizontally instead — the standard mobile
+     tab-bar pattern — with every label kept whole (flex-shrink: 0 +
+     nowrap). Affordance is the peek: the naturally cut-off tab at the right
+     edge says "more this way" (unlike the settings navList, whose buttons
+     nearly fit and would show no cut edge), which is why this strip scrolls
+     while that one wraps. touch-action: pan-x opts the strip into
+     horizontal panning — the root's pan-y intersection stops at this first
+     scroll container (same mechanism as the drawer's pan-y), so the page
+     never scrolls sideways. overscroll-behavior-x: contain stops a flick
+     from chaining past the ends; snap keeps tabs edge-aligned after a
+     fling; the scrollbar stays hidden like every native tab bar. */
+  [data-mobile-nav="frame"] [data-phase] header [role="tablist"] {
+    flex-wrap: nowrap;
+    gap: 0 16px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
+    touch-action: pan-x;
+    scrollbar-width: none;
+  }
+  [data-mobile-nav="frame"] [data-phase] header [role="tablist"]::-webkit-scrollbar {
+    display: none;
+  }
+  [data-mobile-nav="frame"] [data-phase] header [role="tablist"] > button {
+    flex-shrink: 0;
+    white-space: nowrap;
+    scroll-snap-align: start;
+  }
   /* Header crowding on narrow phones.
      A background-job trigger in the header actions, or the subagent lineage
      count ("N 个子代理") living inside the crumbs nav, consumes the width the
@@ -441,14 +649,14 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
      BOTH running and idle descendants, so we key the guards on that root
      rather than the transient running-state dot — otherwise the count gets
      clipped again the moment agents go idle. Match roots with
-     [class*="_root"] (the real class carries a trailing space; [class$="_root"]
+     [class*="_root"] (the real class carries a trailing space; [class*="_root"]
      matches nothing). */
   @media (max-width: 440px) {
-    [data-mobile-nav="frame"] [data-phase] header [class$="_crumbs"] {
+    [data-mobile-nav="frame"] [data-phase] header [class*="_crumbs"] {
       padding-right: 8px;
     }
-    [data-mobile-nav="frame"] [data-phase] header [class$="_headerActions"]:has([class*="_root"]) [class$="_label"]:has(> svg),
-    [data-mobile-nav="frame"] [data-phase] header:has([class$="_crumbs"] [class*="_root"]) [class$="_label"]:has(> svg) {
+    [data-mobile-nav="frame"] [data-phase] header [class*="_headerActions"]:has([class*="_root"]) [class*="_label"]:has(> svg),
+    [data-mobile-nav="frame"] [data-phase] header:has([class*="_crumbs"] [class*="_root"]) [class*="_label"]:has(> svg) {
       max-width: 18px;
       min-width: 18px;
       padding-left: 18px;
@@ -462,13 +670,13 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
      also hold a small right-hand gap — the subagent text should never sit
      flush against the mode component. */
   @media (max-width: 559px) {
-    [data-mobile-nav="frame"] [data-phase] header [class$="_crumbs"] {
+    [data-mobile-nav="frame"] [data-phase] header [class*="_crumbs"] {
       padding-right: 8px;
     }
-    [data-mobile-nav="frame"] [data-phase] header:has([class$="_crumbs"] [class*="_root"]) [class$="_headerActions"] [class*="_root"]:not([class*="_switcherRoot"]):has(> button[class$="_trigger"]) [class$="_count"] {
+    [data-mobile-nav="frame"] [data-phase] header:has([class*="_crumbs"] [class*="_root"]) [class*="_headerActions"] [class*="_root"]:not([class*="_switcherRoot"]):has(> button[class*="_trigger"]) [class*="_count"] {
       display: none !important;
     }
-    [data-mobile-nav="frame"] [data-phase] header:has([class$="_crumbs"] [class*="_root"]):has([class$="_headerActions"] [class*="_root"]) [class$="_label"]:has(> svg) {
+    [data-mobile-nav="frame"] [data-phase] header:has([class*="_crumbs"] [class*="_root"]):has([class*="_headerActions"] [class*="_root"]) [class*="_label"]:has(> svg) {
       max-width: 18px;
       min-width: 18px;
       padding-left: 18px;
@@ -476,7 +684,7 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
     }
   }
   @media (max-width: 359px) {
-    [data-mobile-nav="frame"] [data-phase] header:has([class$="_crumbs"] [class*="_root"]):has([class$="_headerActions"] [class*="_root"]) [class$="_label"]:has(> svg) {
+    [data-mobile-nav="frame"] [data-phase] header:has([class*="_crumbs"] [class*="_root"]):has([class*="_headerActions"] [class*="_root"]) [class*="_label"]:has(> svg) {
       display: none !important;
     }
   }
@@ -484,7 +692,7 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
   /* --- Header popovers on mobile (dsh-client-ui-jobs / dsh-client-ui-subagent) --- */
   /* The official entries sit in the session header actions. Their popovers
      are anchored to the trigger's left edge, so clamp them to the viewport. */
-  [data-mobile-nav="frame"] [data-phase] header [class$="_menu"] {
+  [data-mobile-nav="frame"] [data-phase] header [class*="_menu"] {
     left: 8px !important;
     right: auto !important;
     width: min(336px, calc(100vw - 16px));
@@ -531,12 +739,12 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
     max-height: min(800px, calc(100dvh - 24px - env(safe-area-inset-top, 0px)));
     flex-direction: column !important;
     border-radius: 14px !important;
-    animation: dsh-mobile-nav-sheet-in .22s var(--ds-ease-out, ease-in-out);
+    animation: dsh-web-mobile-sheet-in .22s var(--ds-ease-out, ease-in-out);
   }
   /* The settings sheet's dimmed mask fades in with the panel (the mask is
      the first child of the overlay that directly contains the sheet). */
   :has(> [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"]))) > :first-child {
-    animation: dsh-mobile-nav-fade .18s var(--ds-ease-out, ease-in-out);
+    animation: dsh-web-mobile-fade .18s var(--ds-ease-out, ease-in-out);
   }
   @media (prefers-reduced-motion: reduce) {
     [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])),
@@ -567,7 +775,7 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
      reconciler task (settings-toolbar-reparent), so the tab list must be
      anchored by its class, NOT by :last-child (the reparented toolbar
      becomes the nav's new last child). */
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :first-child [class$="_navList"] {
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :first-child [class*="_navList"] {
     flex: 1 1 auto;
     min-width: 0;
     flex-direction: row !important;
@@ -576,15 +784,28 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
     overflow: visible;
   }
   /* Content toolbar (Open configuration file + close): grouped flush to
-     the right edge, and reparented INTO the nav row on mobile so it shares
-     one line with the tabs (user feedback 2026-08-16 — the toolbar's own
-     row left a full-width dead gap under the tabs). Anchored by class: the
-     header leaves the content subtree, so :first-child/:last-child anchors
-     would now hit the options area. Children carry official auto-margins
-     that would defeat flex-end, so neutralize them. The close button gets
-     a round tappable base so it reads as its own control, not part of the
-     outline button. */
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) [class$="_header"] {
+     the right edge, and reparented INTO the nav row on mobile by the
+     settings-toolbar-reparent reconciler task, so it shares one line with
+     the tabs (user feedback 2026-08-16 — the toolbar's own row left a
+     full-width dead gap under the tabs). Children carry official
+     auto-margins that would defeat flex-end, so neutralize them. The close
+     button gets a round tappable base so it reads as its own control, not
+     part of the outline button.
+     Anchored structurally, not by class substring: a bare [class*="_header"]
+     also matches every plugin settings card header in the options area —
+     the official Plugins config cards (YyYd_a_header) and the dsh-web-ui-all
+     group cards (Kwoi6G_header / bpnj3G_header / Jh0q7G_header / jmhvDG_header /
+     rUBhvW_header, all sharing the upstream template text-align:left,
+     gap:12px, padding:14px 16px). The old broad anchor right-aligned their
+     text, gutted the padding and painted a 32px gray circle behind the
+     chevron (2026-09-05 sweep: 8 bleeding headers). The toolbar has two
+     structural homes, both covered below: after the reparent it is a direct
+     child of the nav row ([class*="_nav"]); before the reparent runs it is
+     the content column's direct child (the panel's :last-child). Card
+     headers live deeper — inside the options scroll area — and match
+     neither, so no per-plugin hash guards are needed. */
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > [class*="_nav"] > [class*="_header"]:not([class*="_headerActions"]),
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :last-child > [class*="_header"]:not([class*="_headerActions"]) {
     flex: 0 0 auto;
     justify-content: flex-end;
     align-items: center;
@@ -592,11 +813,13 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
     padding: 0 0 0 4px;
     min-height: 40px;
   }
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) [class$="_header"] > * {
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > [class*="_nav"] > [class*="_header"]:not([class*="_headerActions"]) > *,
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :last-child > [class*="_header"]:not([class*="_headerActions"]) > * {
     margin-left: 0 !important;
     margin-right: 0 !important;
   }
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) [class$="_header"] > :last-child {
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > [class*="_nav"] > [class*="_header"]:not([class*="_headerActions"]) > :last-child,
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :last-child > [class*="_header"]:not([class*="_headerActions"]) > :last-child {
     width: 32px;
     height: 32px;
     border-radius: 50% !important;
@@ -609,10 +832,10 @@ export const LAYOUT_CSS = `/* ---------- mobile-only layout ---------- */
      vertical cards (~268px) that eat half the sheet. Turn them into a
      compact horizontal trio (icon + label inline, equal widths).
      Relies on the official cube-row class name of this version. */
-  [aria-modal="true"] [class$="_cubeRow"] {
+  [aria-modal="true"] [class*="_cubeRow"] {
     gap: 6px;
   }
-  [aria-modal="true"] [class$="_cubeRow"] > * {
+  [aria-modal="true"] [class*="_cubeRow"] > * {
     flex: 1 1 0;
     flex-direction: row !important;
     align-items: center;

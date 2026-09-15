@@ -31,13 +31,14 @@ export function installDebugBadge(ctx: ClientContext): void {
       }
       const frame = document.querySelector<HTMLElement>('[data-mobile-nav="frame"]')
       return [
+        `build 20260906 (overlay takeover re-scope)`,
         `URL ${location.pathname}${location.search}`,
         `W ${innerWidth} x ${innerHeight} dpr ${devicePixelRatio}`,
         `mq≤1023 ${matchMedia(MOBILE_QUERY).matches}  mq≥1024 ${matchMedia(DESKTOP_QUERY).matches}`,
         `css ${q('style[data-plugin-css*="mobile"]')}  frame ${!!frame}`,
         `previewCol ${vis('[data-aionui-preview-col]')}  explorerCol ${vis('[data-aionui-explorer-col]')}`,
         `previewOpen ${frame?.hasAttribute('data-aionui-preview-open') ?? '?'}  explorerOpen ${frame?.hasAttribute('data-aionui-explorer-open') ?? '?'}  previewFull ${frame?.hasAttribute('data-mobile-preview-full') ?? '?'}`,
-        `header ${vis('[data-phase] header')}  composer ${q('textarea')}`,
+        `header ${vis('[data-phase] header')}  composer ${q('textarea, [data-composer-input]')}`,
         `genui cards ${document.querySelectorAll('[data-genui]').length}  panel ${q('[data-genui-panel]')}`,
         `phase ${document.querySelector('[data-phase]')?.getAttribute('data-phase') ?? '?'}`,
         `errs ${errors.slice(-5).join(' | ') || 'none'}`,
@@ -66,5 +67,5 @@ export function installDebugBadge(ctx: ClientContext): void {
       clearInterval(timer)
       badge.remove()
     }
-  }, 'dsh-mobile-nav: debug badge')
+  }, 'dsh-web-mobile: debug badge')
 }

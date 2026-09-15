@@ -1,4 +1,5 @@
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import { consumeIfGestured, isStrokeLocked } from './gesture-guard.ts'
 import { createReconcilerCore } from '../core/reconciler-core.ts'
 import type { ReconcilerTask } from '../core/reconciler-core.ts'
 import { createPreviewCloseTask, createSheetRiseTask } from './aionui-compat.ts'
@@ -7,29 +8,50 @@ import { createPreviewFullscreenTask } from './preview-fullscreen.ts'
 import { createGitChipTask } from './git-chip-reparent.ts'
 import { createSettingsToolbarTask } from './settings-toolbar-reparent.ts'
 import { createOverlayTask } from './overlay-backdrop-fab.ts'
+import { createFileViewerMarkerTask } from './file-viewer-compat.ts'
 
 // The custom client bundler cannot resolve `../` requires from src/client/effects,
 // so this mirrors the namespace id from src/client/locales.ts. Keep in sync.
 const NS = 'mobileNav'
 
-/** Same breakpoint as the shell's SIDEBAR_AUTO_COLLAPSE (viewport < 1024). */
-export const MOBILE_QUERY = '(max-width: 1023px)'
+/** Same width bound as the shell's SIDEBAR_AUTO_COLLAPSE (viewport < 1024),
+ *  ANDed with a touch-primary pointer guard. Width alone cannot tell a phone
+ *  from a desktop window: split views and OS display scaling push a PC's CSS
+ *  viewport below 1024px too, and the whole mobile shell (drawer, header
+ *  Files button, gestures) would mount there. (pointer: coarse) keeps the
+ *  adaptation on touch-primary devices — phones, tablets, DSHA — while any
+ *  mouse-driven window stays desktop at every width. Headless probes have no
+ *  pointer at all: arm the mobile branch with Emulation.setTouchEmulation-
+ *  Enabled before asserting mobile UI. */
+export const MOBILE_QUERY = '(max-width: 1023px) and (pointer: coarse)'
 
-/** Desktop no-op boundary, kept next to the mobile query for one source of truth. */
+/** Informational wide-bound for the debug badge. The authoritative desktop
+ *  guard is the CSS hide block in misc.css.ts — the exact complement of
+ *  MOBILE_QUERY — because slot-rendered controls exist at every width. */
 export const DESKTOP_QUERY = '(min-width: 1024px)'
 
+/** Pointer-only guard for the ONE feature that has no desktop equivalent:
+ *  the session-delete menu injection. Armed on touch-primary devices at
+ *  EVERY width — a large tablet in landscape (e.g. 1238px) keeps the desktop
+ *  layout but still gets the 「删除会话」 item. Mouse-driven or pointer-less
+ *  windows never arm it, at any width. */
+export const TOUCH_QUERY = '(pointer: coarse)'
+
 /**
- * Re-arm a mobile-only DOM effect on every width change. Replaces the
+ * Re-arm a mobile-only DOM effect on every query change. Replaces the
  * repeated matchMedia + change-listener scaffold so all breakpoint strings
- * live in one place.
+ * live in one place. `query` defaults to MOBILE_QUERY; effects that arm on a
+ * different condition (e.g. TOUCH_QUERY) pass their own string instead of
+ * building a private matchMedia scaffold.
  */
 export function installMobileEffect(
   ctx: ClientContext,
   label: string,
   install: (narrow: MediaQueryList) => (() => void) | undefined,
+  query: string = MOBILE_QUERY,
 ): void {
   ctx.effect(() => {
-    const narrow = window.matchMedia(MOBILE_QUERY)
+    const narrow = window.matchMedia(query)
     let cleanup: (() => void) | undefined
     const arm = (): void => {
       cleanup?.()
@@ -127,7 +149,7 @@ const core = createReconcilerCore({
 export function installReconciler(ctx: ClientContext): () => void {
   if (reconcilerInstalled) return () => {}
   reconcilerInstalled = true
-  installMobileEffect(ctx, 'dsh-mobile-nav: DOM reconciler', () => {
+  installMobileEffect(ctx, 'dsh-web-mobile: DOM reconciler', () => {
     // Coalesce every mutation burst (typing, animations, per-token TPS
     // re-renders) into one dirty-key pass per animation frame. Each task
     // declares scopes so only intersecting tasks run on a given flush.
@@ -171,50 +193,145 @@ export function addReconcilerTask(task: ReconcilerTask): () => void {
 }
 
 /**
+ * Whether the page runs on iOS / iPadOS WebKit, where focusing a text field
+ * whose computed font-size is below 16px zooms the whole visual viewport
+ * (#45). Every other engine ignores field font-size, so the 16px floor in
+ * misc.css.ts is gated on this marker instead of applying to every phone —
+ * Android would only get bigger search boxes for no benefit.
+ *
+ * Pure and injectable so the decision table is unit-testable:
+ * - The feature probe is the reliable signal: `font: -apple-system-body` is
+ *   Safari-only and `-webkit-touch-callout` is an iOS property, so the pair
+ *   is true on iOS WebKit (including Chrome / Edge / Opera on iOS, which are
+ *   WebKit and zoom identically) and false on Chromium (measured) and on
+ *   macOS Safari.
+ * - The UA fallback covers engines whose CSS.supports is missing or which
+ *   parse the probe differently: iPhone / iPad / iPod UAs, plus iPadOS 13+
+ *   which reports a Macintosh UA and is told apart by its touch points.
+ */
+export function detectIosWebKit(
+  nav: { userAgent: string; maxTouchPoints: number },
+  supports: ((condition: string) => boolean) | null,
+): boolean {
+  if (supports !== null) {
+    try {
+      if (supports('(font: -apple-system-body) and (-webkit-touch-callout: none)')) return true
+    } catch {
+      // A UA that rejects the condition string falls through to the UA test.
+    }
+  }
+  const ua = nav.userAgent
+  if (/iP(hone|ad|od)/.test(ua)) return true
+  return /Macintosh/.test(ua) && nav.maxTouchPoints > 1
+}
+
+/** Marker the iOS-only zoom-guard CSS is scoped to (html element). */
+const IOS_MARKER = 'data-mobile-nav-ios'
+
+/**
+ * Viewport content the plugin owns while the mobile branch is armed.
+ * Deliberately zoom-free: iOS 10+ ignores maximum-scale/user-scalable for
+ * user pinch but other engines honor them, so writing them would only take
+ * zoom away from Android/DSHA; the iOS focus-zoom fix is the >=16px field
+ * floor (data-mobile-nav-ios), not a zoom ban (#45).
+ */
+const VIEWPORT_CONTENT = 'width=device-width, initial-scale=1, viewport-fit=cover'
+
+const findViewportMeta = (): HTMLMetaElement | null =>
+  document.querySelector<HTMLMetaElement>('meta[name="viewport"]')
+
+/**
  * Phone chrome: KEEP the system status bar (no fullscreen) and make it
  * blend into the page. On narrow screens:
- * - The viewport meta gains viewport-fit=cover, so env(safe-area-inset-top)
- *   is the real status-bar / notch height and the stylesheet can push every
- *   surface below it (off notched phones, or in a browser tab where the
- *   layout viewport already sits below the status bar, the inset is 0 and
- *   nothing shifts).
+ * - The viewport meta is OWNED by the plugin while armed:
+ *   width=device-width, initial-scale=1, viewport-fit=cover, re-asserted on
+ *   every host rewrite, node replacement, or late injection, so
+ *   env(safe-area-inset-top) stays the real status-bar / notch height
+ *   instead of silently going stale when the host touches the meta. No zoom
+ *   tokens here: iOS 10+ ignores them for user pinch but other engines
+ *   honor them, and the focus-zoom fix is the >=16px field floor (#45), not
+ *   a zoom ban. Dispose restores the host's own content as observed at arm
+ *   time.
  * - A theme-color meta tracks the shell background (the official theme is
  *   toggled by body[data-ds-dark-theme], which flips --dsw-alias-bg-base):
  *   Android then paints the status bar / URL bar with the page's own base
  *   color, so the status bar reads as part of the UI instead of a foreign
  *   strip. The drawer paints the same strip on iOS / notch displays.
- * - gesturestart is suppressed as the legacy-iOS fallback for double-tap
- *   zoom; modern browsers are covered by the stylesheet's
- *   touch-action: manipulation (which keeps pan and pinch zoom).
+ * - documentElement carries data-mobile-nav-ios on iOS WebKit so the
+ *   stylesheet can hold every text field at >=16px and Safari never
+ *   focus-zooms the viewport (#45). Double-tap zoom is off through
+ *   touch-action; pinch zoom stays available on purpose — it is the only way
+ *   back out of a zoom the browser applied on its own.
  */
 export function installPhoneChrome(ctx: ClientContext): void {
-  installMobileEffect(ctx, 'dsh-mobile-nav: status bar theme + viewport + zoom guard', () => {
-    const viewport = document.querySelector<HTMLMetaElement>('meta[name="viewport"]')
-    const originalViewport = viewport?.content ?? ''
+  installMobileEffect(ctx, 'dsh-web-mobile: status bar theme + viewport + zoom guard', () => {
     const themeMeta = document.createElement('meta')
     themeMeta.name = 'theme-color'
     const bodyBg = (): string => getComputedStyle(document.body).backgroundColor
+    const root = document.documentElement
+    let originalViewport: string | null = null
+    let observedMeta: HTMLMetaElement | null = null
+    // Our own write retriggers the observers; the equality check in
+    // assertViewport turns that pass into a no-op. `applying` guards the
+    // write itself against re-entrant observer callbacks on exotic engines.
+    let applying = false
 
-    const sync = (): void => {
-      if (viewport !== null) viewport.content = 'width=device-width, initial-scale=1, viewport-fit=cover'
-      themeMeta.content = bodyBg()
-      if (themeMeta.parentElement === null) document.head.appendChild(themeMeta)
+    // The plugin owns the meta while armed, so a host rewrite, a node
+    // replacement, or a meta that arrives after this effect arms cannot
+    // silently drop viewport-fit=cover and shift every surface under the
+    // notch. Both observers funnel into the same assertion;
+    // attachMetaObserver re-binds to the current node so a replacement keeps
+    // being watched.
+    const assertViewport = (): void => {
+      const viewport = findViewportMeta()
+      if (viewport === null) return
+      if (originalViewport === null) originalViewport = viewport.content
+      if (applying || viewport.content === VIEWPORT_CONTENT) return
+      applying = true
+      viewport.content = VIEWPORT_CONTENT
+      applying = false
     }
-    const restore = (): void => {
-      if (viewport !== null) viewport.content = originalViewport
-      themeMeta.remove()
+    const metaObserver = new MutationObserver(assertViewport)
+    const attachMetaObserver = (): void => {
+      const viewport = findViewportMeta()
+      if (viewport === observedMeta) return
+      if (observedMeta !== null) metaObserver.disconnect()
+      observedMeta = viewport
+      if (viewport !== null) {
+        metaObserver.observe(viewport, { attributes: true, attributeFilter: ['content'] })
+      }
     }
-    const onGestureStart = (event: Event) => event.preventDefault()
+    const headObserver = new MutationObserver((): void => {
+      attachMetaObserver()
+      assertViewport()
+    })
+    headObserver.observe(document.head, { childList: true })
+    attachMetaObserver()
+    assertViewport()
+
     const observer = new MutationObserver(() => {
       themeMeta.content = bodyBg()
     })
     observer.observe(document.body, { attributes: true, attributeFilter: ['data-ds-dark-theme'] })
-    document.addEventListener('gesturestart', onGestureStart)
-    sync()
+    const cssSupports =
+      typeof CSS !== 'undefined' && typeof CSS.supports === 'function'
+        ? (condition: string): boolean => CSS.supports(condition)
+        : null
+    if (detectIosWebKit(navigator, cssSupports)) root.setAttribute(IOS_MARKER, '')
+    themeMeta.content = bodyBg()
+    if (themeMeta.parentElement === null) document.head.appendChild(themeMeta)
     return () => {
+      metaObserver.disconnect()
+      headObserver.disconnect()
       observer.disconnect()
-      document.removeEventListener('gesturestart', onGestureStart)
-      restore()
+      const viewport = findViewportMeta()
+      // Hand the meta back only if it still holds OUR content; a host value
+      // written while we were armed wins on dispose.
+      if (viewport !== null && originalViewport !== null && viewport.content === VIEWPORT_CONTENT) {
+        viewport.content = originalViewport
+      }
+      themeMeta.remove()
+      root.removeAttribute(IOS_MARKER)
     }
   })
 }
@@ -234,7 +351,7 @@ export function installPhoneChrome(ctx: ClientContext): void {
  *   excluded — they open a menu that must survive the tap.
  */
 export function installOverlayInteractions(ctx: ClientContext): void {
-  installMobileEffect(ctx, 'dsh-mobile-nav: drawer close (Escape + navigate)', () => {
+  installMobileEffect(ctx, 'dsh-web-mobile: drawer close (Escape + navigate)', () => {
     const toggleSidebar = (): void => ctx.layout.toggleSidebar()
     const drawerOpen = (): boolean => {
       const frame = getFrame()
@@ -247,24 +364,122 @@ export function installOverlayInteractions(ctx: ClientContext): void {
     }
     // Capture phase: run before the shell or a plugin processes the click,
     // so takeover panels never render under the open drawer.
-    const onDrawerClick = (event: MouseEvent): void => {
-      if (document.querySelector('[aria-modal="true"]') !== null) return
-      if (!drawerOpen()) return
-      const target = event.target as HTMLElement | null
-      if (target === null) return
-      const drawer = document.querySelector<HTMLElement>('[data-mobile-nav="frame"] > :first-child')
-      if (drawer === null || !drawer.contains(target)) return
-      if (target.closest('[class*="sessionRow"] button') !== null) return
-      const navigates = target.closest(
+    const drawerRoot = (): HTMLElement | null =>
+      document.querySelector<HTMLElement>('[data-mobile-nav="frame"] > :first-child')
+
+    const shouldCloseOnTapInsideDrawer = (target: EventTarget | null): boolean => {
+      if (document.querySelector('[aria-modal="true"]') !== null) return false
+      if (!drawerOpen()) return false
+      if (!(target instanceof Element)) return false
+      const drawer = drawerRoot()
+      if (drawer === null || !drawer.contains(target)) return false
+      if (target.closest('[class*="sessionRow"] button') !== null) return false
+      return target.closest(
         'button[data-dsh-taskboard-entry], button[data-dsh-ssh-entry], [class*="newSession"], [class*="sessionRow"], [class*="searchResultRow"], [class*="searchResultWorkspace"], [class*="usg_"]',
-      )
-      if (navigates !== null) toggleSidebar()
+      ) !== null
     }
+    // Touch path for session/search rows: never close the drawer from pointer
+    // events. Closing at pointerup (or deferring the close) races the browser's
+    // synthesized click; some iOS shells suppress that click entirely, so the
+    // row's onClick never runs. Instead arm the drawer to close on the *fact*
+    // of navigation: when the selected row's title changes, React has already
+    // opened the conversation, so the drawer can close safely.
+    let lastTouchNavAt = 0
+    let navSignatureAtArm = ''
+    let navObserver: MutationObserver | null = null
+    let navTimer: number | null = null
+
+    const selectedRowSignature = (): string | null => {
+      const selected = drawerRoot()?.querySelector<HTMLElement>('[role="treeitem"][aria-selected="true"]')
+      const title = selected?.querySelector<HTMLElement>('[class*="_title"]')
+      return title?.textContent?.trim() ?? null
+    }
+
+    const disarmNav = (): void => {
+      navObserver?.disconnect()
+      navObserver = null
+      if (navTimer !== null) window.clearTimeout(navTimer)
+      navTimer = null
+      navSignatureAtArm = ''
+    }
+
+    const armNav = (): void => {
+      disarmNav()
+      navSignatureAtArm = selectedRowSignature() ?? ''
+      const root = drawerRoot()
+      if (root === null) return
+      navObserver = new MutationObserver(() => {
+        if (!drawerOpen()) {
+          disarmNav()
+          return
+        }
+        const signature = selectedRowSignature()
+        if (signature !== null && signature !== navSignatureAtArm) {
+          disarmNav()
+          toggleSidebar()
+        }
+      })
+      navObserver.observe(root, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['aria-selected'],
+      })
+      navTimer = window.setTimeout(disarmNav, 2000)
+    }
+
+    const onDrawerClick = (event: MouseEvent): void => {
+      // A classified swipe already toggled the drawer; never let its
+      // synthetic tap also close it / navigate a row (gesture-guard).
+      // isStrokeLocked: a stroke axis-locked mid-swipe (audit S0) — the
+      // consume marks do not exist until the gesture layer's own pointerup,
+      // which runs AFTER this handler on the same release event.
+      if (isStrokeLocked() || consumeIfGestured(event)) return
+      // A touch row-tap owns the close (pointerup or the navigation observer);
+      // let the row's click reach React without toggling the drawer twice.
+      if (performance.now() - lastTouchNavAt < 500) return
+      if (shouldCloseOnTapInsideDrawer(event.target)) toggleSidebar()
+    }
+
+    const onDrawerPointerUp = (event: PointerEvent): void => {
+      // A classified swipe must not arm the nav observer or toggle again
+      // (gesture-guard): the drawer already toggled, and the row under the
+      // stroke was never a tap. isStrokeLocked covers the release event of
+      // a stroke locked mid-swipe but not yet classified — this handler
+      // runs before the gesture layer's own pointerup (audit S0/S1: without
+      // it the host toggled first and the gesture toggled back, net zero).
+      if (isStrokeLocked() || consumeIfGestured(event)) return
+      if (event.pointerType !== 'touch' && event.pointerType !== 'pen') return
+      const target = event.target
+      if (!(target instanceof Element)) return
+      if (!shouldCloseOnTapInsideDrawer(target)) return
+
+      const row = target.closest('[role="treeitem"]')
+      if (row !== null) {
+        lastTouchNavAt = performance.now()
+        if (row.getAttribute('aria-selected') === 'true') {
+          // Already-selected row will not navigate; closing immediately is safe.
+          toggleSidebar()
+        } else {
+          // Unselected row: let navigation land, then close via the observer.
+          armNav()
+        }
+        return
+      }
+
+      // Non-row nav targets (newSession / taskboard / ssh / search rows that
+      // are not treeitems): the pointerup close path is still correct.
+      toggleSidebar()
+    }
+
     document.addEventListener('keydown', onKeyDown, true)
     document.addEventListener('click', onDrawerClick, true)
+    document.addEventListener('pointerup', onDrawerPointerUp, true)
     return () => {
+      disarmNav()
       document.removeEventListener('keydown', onKeyDown, true)
       document.removeEventListener('click', onDrawerClick, true)
+      document.removeEventListener('pointerup', onDrawerPointerUp, true)
     }
   })
 }
@@ -286,6 +501,7 @@ export function registerReconcileTasks(ctx: ClientContext): () => void {
     addReconcilerTask(createSheetRiseTask()),
     addReconcilerTask(createStatsLineTask()),
     addReconcilerTask(createOverlayTask(t, () => ctx.layout.toggleSidebar())),
+    addReconcilerTask(createFileViewerMarkerTask()),
   ]
   return () => {
     for (const remove of removeTasks) remove()

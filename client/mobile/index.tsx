@@ -3,8 +3,14 @@ import { MobileNavToggle } from './components/MobileNavToggle.tsx'
 import { MobileDrawerFooter } from './components/MobileDrawerFooter.tsx'
 import { MOBILE_CSS } from './styles/index.ts'
 
-import { installFrameController, installOverlayInteractions, installPhoneChrome, installReconciler, registerReconcileTasks } from './effects/phone-chrome.ts'
+import { installFrameController, installOverlayInteractions, installPhoneChrome, installReconciler, registerReconcileTasks, MOBILE_QUERY } from './effects/phone-chrome.ts'
+import { installSidebarSwipe } from './effects/sidebar-swipe.ts'
+import { installSubagentChipTouch } from './effects/subagent-chip-touch.ts'
+import { installSessionMenuDelete } from './effects/session-menu.ts'
+import { installComposerKeyboardGuard } from './effects/composer-keyboard-guard.ts'
 import { installAionuiCompat } from './effects/aionui-compat.ts'
+import { createRafScheduler } from './core/raf-scheduler.ts'
+import { installDebugBadge } from './debug.ts'
 import { NS, en, zh } from './i18n/locales.ts'
 import type { MobileNavKey } from './i18n/locales.ts'
 
@@ -16,7 +22,15 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 
 /** Required services (cordis fiber inject — the loader passes all module exports as an object plugin). */
-export const inject = ['slots', 'layout', 'locale', 'sessionLogDownload']
+export const inject = ['slots', 'layout', 'locale', 'sessionLogDownload', 'sessions', 'workspaces']
+
+/**
+ * Session-id shape the installed host's sessionLogDownload.download expects.
+ * Derived, never imported, so one program type-checks against every host
+ * generation: 0.1.1 types the parameter as plain string, 0.1.2-alpha.1 brands
+ * it Branded<'SessionId'>. The runtime value is always the host's own id.
+ */
+type DownloadSessionId = Parameters<ClientContext['sessionLogDownload']['download']>[0]
 
 /**
  * Mobile-adaptive shell, browser half: injects the mobile stylesheet, then
@@ -25,12 +39,12 @@ export const inject = ['slots', 'layout', 'locale', 'sessionLogDownload']
  * @param ctx - client root context.
  */
 export function apply(ctx: ClientContext): void {
-  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-mobile-nav: dictionaries')
+  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-web-mobile: dictionaries')
 
   ctx.effect(() => {
     const tag = document.createElement('style')
-    tag.dataset.plugin = '@dsh-external/dsh-mobile-nav'
-    tag.dataset.pluginCss = '@dsh-external/dsh-mobile-nav/mobile.css'
+    tag.dataset.plugin = 'dsh-web-mobile'
+    tag.dataset.pluginCss = 'dsh-web-mobile/mobile.css'
     tag.textContent = MOBILE_CSS
     document.head.appendChild(tag)
     // Keep this stylesheet last in <head> so its overrides win over the
@@ -41,21 +55,50 @@ export function apply(ctx: ClientContext): void {
     return () => {
       tag.remove()
     }
-  }, 'dsh-mobile-nav: styles')
+  }, 'dsh-web-mobile: styles')
 
   // Hard-fix the installed-plugins list text layout: the host market UI
   // injects its own CSS after this plugin's stylesheet, so CSS overrides can
-  // be beaten. Inline !important styles win over every external rule.
+  // be beaten. Inline !important styles win over every external rule. Keep
+  // the selector on outer rows only; irowActions/irowTrailing are nested
+  // flex containers and must retain the market's own action geometry.
   ctx.effect(() => {
-    const mq = window.matchMedia('(max-width: 1023px)')
+    const mq = window.matchMedia(MOBILE_QUERY)
+    const rowSelector = '[class*="irow"]:not([class*="irowActions"]):not([class*="irowTrailing"])'
     const set = (el: HTMLElement, props: Record<string, string>): void => {
       for (const [key, value] of Object.entries(props)) {
         el.style.setProperty(key, value, 'important')
       }
     }
+    const unset = (el: HTMLElement, props: readonly string[]): void => {
+      for (const key of props) el.style.removeProperty(key)
+    }
+    const rowProps = ['flex-wrap', 'align-items', 'gap'] as const
+    const firstProps = ['flex', 'max-width', 'min-width'] as const
+    const textProps = ['white-space', 'overflow', 'text-overflow', 'max-width'] as const
+    const clear = (): void => {
+      document.querySelectorAll<HTMLElement>(rowSelector).forEach((row) => {
+        unset(row, rowProps)
+        const first = row.children[0] as HTMLElement | undefined
+        if (first) unset(first, firstProps)
+        row.querySelectorAll<HTMLElement>(':scope > button, :scope > [class*="owner"], :scope > [class*="grow"]').forEach((el) => {
+          unset(el, ['order'])
+        })
+        const spec = row.querySelector<HTMLElement>('[class*="spec"]')
+        const nm = row.querySelector<HTMLElement>('[class*="nm"]')
+        if (spec) unset(spec, textProps)
+        if (nm) unset(nm, textProps)
+      })
+    }
     const apply = (): void => {
-      if (!mq.matches) return
-      document.querySelectorAll<HTMLElement>('[class*="irow"]').forEach((row) => {
+      // The market rows only exist while the market UI is mounted (inside a
+      // settings dialog). Skip the full-document class-substring scan on every
+      // streamed mutation frame with no dialog open; dshmarket keeps the
+      // data-dsh-market-root marker (1.20.x), [role="dialog"] covers the
+      // settings dialog generically so a marker change degrades to cost, not
+      // to a silently dead effect.
+      if (document.querySelector('[data-dsh-market-root], [role="dialog"]') === null) return
+      document.querySelectorAll<HTMLElement>(rowSelector).forEach((row) => {
         set(row, {
           'flex-wrap': 'wrap',
           'align-items': 'center',
@@ -69,18 +112,6 @@ export function apply(ctx: ClientContext): void {
             'min-width': '0',
           })
         }
-        row.querySelectorAll<HTMLElement>(':scope > button[class*="switch"]').forEach((el) => {
-          set(el, { 'order': '3' })
-        })
-        row.querySelectorAll<HTMLElement>(':scope > button:not([class*="switch"])').forEach((el) => {
-          set(el, { 'order': '2' })
-        })
-        row.querySelectorAll<HTMLElement>(':scope > [class*="owner"]').forEach((el) => {
-          set(el, { 'order': '1' })
-        })
-        row.querySelectorAll<HTMLElement>(':scope > [class*="grow"]').forEach((el) => {
-          set(el, { 'order': '0' })
-        })
         const spec = row.querySelector<HTMLElement>('[class*="spec"]')
         const nm = row.querySelector<HTMLElement>('[class*="nm"]')
         if (spec) {
@@ -101,18 +132,30 @@ export function apply(ctx: ClientContext): void {
         }
       })
     }
-    apply()
-    const mo = new MutationObserver(apply)
-    mo.observe(document.documentElement, { childList: true, subtree: true })
-    const onMq = (): void => {
+    const arm = (): void => {
+      clear()
       if (mq.matches) apply()
     }
-    mq.addEventListener('change', onMq)
+    arm()
+    // Streaming floods this observer with document-wide childList batches;
+    // coalesce to one apply per frame and re-check the breakpoint at flush
+    // time so a queued callback never writes mobile styles on desktop.
+    const scheduler = createRafScheduler(
+      (cb) => window.requestAnimationFrame(cb),
+      (id) => window.cancelAnimationFrame(id),
+    )
+    const mo = new MutationObserver(() => {
+      if (mq.matches) scheduler.schedule(() => { if (mq.matches) apply() })
+    })
+    mo.observe(document.documentElement, { childList: true, subtree: true })
+    mq.addEventListener('change', arm)
     return () => {
+      scheduler.cancel()
       mo.disconnect()
-      mq.removeEventListener('change', onMq)
+      mq.removeEventListener('change', arm)
+      clear()
     }
-  }, 'dsh-mobile-nav: installed-list-inline-styles')
+  }, 'dsh-web-mobile: installed-list-inline-styles')
 
 
   // Shared mobile infrastructure: frame marker ownership and the single
@@ -127,16 +170,36 @@ export function apply(ctx: ClientContext): void {
     return () => {
       for (const stop of stops) stop()
     }
-  }, 'dsh-mobile-nav: reconciler infrastructure')
+  }, 'dsh-web-mobile: reconciler infrastructure')
 
 
 
   // Drawer close interactions: Escape and navigation taps inside the drawer.
   installOverlayInteractions(ctx)
 
+  // Session deletion, injected into each session row's ⋯ menu (beside
+  // rename / fork / archive) with a confirm dialog. Mobile-only.
+  installSessionMenuDelete(ctx)
+
+  // Sidebar swipe gestures: edge swipe-in opens the drawer, content swipe-out
+  // closes it (release-classified, zero inline transforms — A 档).
+  installSidebarSwipe(ctx)
+
+  // Lineage-count chip: reliable open/close on touch pointers (upstream is
+  // hover-timer driven and has no onClick on the count variant).
+  installSubagentChipTouch(ctx)
+
+  // iOS: tapping the composer's send/stop/+ buttons must not re-raise the
+  // dismissed keyboard (upstream keepFocus focuses the editor on mousedown).
+  installComposerKeyboardGuard(ctx)
+
   installPhoneChrome(ctx)
 
   installAionuiCompat(ctx)
+
+  // Debug badge (?mobile-nav-debug=1): live state overlay for phone-side
+  // repros. No-op without the query param (docs: README, AGENTS.md).
+  installDebugBadge(ctx)
 
   ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
     name: 'conversation.session.header.actions',
@@ -166,7 +229,11 @@ export function apply(ctx: ClientContext): void {
     order: 5,
     locale: NS,
     inject: () => ({
-      downloadSessionLog: (sessionId: string) => ctx.sessionLogDownload.download(sessionId),
+      // The component's internal id is a plain string (slot runtime typing);
+      // the host-generation brand boundary lives here and only here, hence
+      // the double assertion (string and Branded<'SessionId'> do not overlap).
+      downloadSessionLog: (sessionId: string) =>
+        ctx.sessionLogDownload.download(sessionId as unknown as DownloadSessionId),
       toggleSidebar: () => ctx.layout.toggleSidebar(),
     }),
   }, MobileDrawerFooter))
