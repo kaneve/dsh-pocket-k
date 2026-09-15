@@ -5,19 +5,9 @@ import assert from 'node:assert/strict';
 
 import { createPocketService, selectLanIPv4 } from '../lib/service.mjs';
 import { installPocketRpc } from '../lib/web-rpc.js';
-import { POCKET_RPC_CHANNEL, POCKET_ENDPOINTS } from '../client/api.js';
+import { POCKET_ENDPOINTS } from '../client/api.js';
 import { isValidIpv4 } from '../lib/ip.mjs';
-
-function fakeCtxConnection() {
-  let handler = null;
-  const handle = (channel, fn, opts) => {
-    assert.equal(channel, POCKET_RPC_CHANNEL);
-    assert.deepEqual(opts, { authority: 'loopback' });
-    handler = fn;
-    return () => { handler = null; };
-  };
-  return { rpc: { handle }, get handler() { return handler; } };
-}
+import { fakeCtxConnection } from './helpers/fake-rpc-ctx.mjs';
 
 function stubInternals() {
   const started = [];
@@ -159,7 +149,7 @@ test('RPC：status / tunnel.start / tunnel.stop / 未知端点', async () => {
   const internals = stubInternals();
   const service = createPocketService({ dshPort: 3080, port: 3081, internals });
   const conn = fakeCtxConnection();
-  installPocketRpc({ connection: conn }, { service, log: { error() {}, warn() {} } });
+  installPocketRpc(conn, { service, log: { error() {}, warn() {} } });
 
   // 先让代理跑起来（插件 apply 里会自动启动）
   await service.startProxy();
@@ -196,7 +186,7 @@ test('RPC：lan.setOverride 设置/清除覆盖地址，非法 IP 被拒绝', as
   let stored = '';
   const service = createPocketService({ dshPort: 3080, port: 3081, internals, getLanIpOverride: () => stored });
   const conn = fakeCtxConnection();
-  installPocketRpc({ connection: conn }, {
+  installPocketRpc(conn, {
     service,
     getLanIpOverride: () => stored,
     setLanIpOverride: (ip) => {
@@ -244,7 +234,7 @@ test('RPC：lan.setEnabled 关闭后代理只绑 127.0.0.1，status.lanUrl 置�
     getLanEnabled: () => lanOn,
   });
   const conn = fakeCtxConnection();
-  installPocketRpc({ connection: conn }, {
+  installPocketRpc(conn, {
     service,
     getLanEnabled: () => lanOn,
     setLanEnabled: (on) => { lanOn = !!on; return lanOn; },
@@ -279,7 +269,7 @@ test('RPC：status 携带重启提示（restartNotice）', async () => {
   const internals = stubInternals();
   const service = createPocketService({ dshPort: 3080, port: 3081, internals });
   const conn = fakeCtxConnection();
-  installPocketRpc({ connection: conn }, {
+  installPocketRpc(conn, {
     service,
     restartNotice: () => ({ at: Date.now(), pid: 12345 }),
     log: { error() {}, warn() {} },
@@ -432,7 +422,7 @@ test('RPC：restartNotice 读取抛错时 status 优雅降级为 null', async ()
   const internals = stubInternals();
   const service = createPocketService({ dshPort: 3080, port: 3081, internals });
   const conn = fakeCtxConnection();
-  installPocketRpc({ connection: conn }, {
+  installPocketRpc(conn, {
     service,
     restartNotice: async () => { throw new Error('ENOENT'); },
     log: { error() {}, warn() {} },
@@ -448,7 +438,7 @@ test('RPC：version 返回磁盘版本 current 与启动版本 loaded', async ()
   const internals = stubInternals();
   const service = createPocketService({ dshPort: 3080, port: 3081, internals });
   const conn = fakeCtxConnection();
-  installPocketRpc({ connection: conn }, {
+  installPocketRpc(conn, {
     service,
     runUpdate: { currentVersion: () => '1.0.15', loadedVersion: () => '1.0.14', perform: async () => ({ ok: true }) },
     log: { error() {}, warn() {} },
@@ -591,7 +581,7 @@ test('桌面端（desktop=true）：update/restart 关闭，status 带标志，�
   const internals = stubInternals();
   const service = createPocketService({ dshPort: 3080, port: 3081, internals });
   const conn = fakeCtxConnection();
-  installPocketRpc({ connection: conn }, {
+  installPocketRpc(conn, {
     service,
     desktop: true,
     runUpdate: { currentVersion: () => '1.4.0', loadedVersion: () => '1.4.0', perform: async () => ({ ok: true }) },
@@ -693,7 +683,7 @@ test('RPC：局域网密码独立于公网；lanTokenRefresh 刷新并返回新�
   const service = createPocketService({ dshPort: 3080, port: 3081, internals });
   const conn = fakeCtxConnection();
   let lan = '11111111';
-  installPocketRpc({ connection: conn }, {
+  installPocketRpc(conn, {
     service,
     getToken: () => '99999999',
     getLanToken: () => lan,
@@ -956,7 +946,7 @@ test('RPC：cfMode / cfToken 状态与设置端点', async () => {
   const conn = fakeCtxConnection();
   let mode = null;
   let token = null;
-  const dispose = installPocketRpc({ connection: conn }, {
+  const dispose = installPocketRpc(conn, {
     service: { status: async () => ({}) },
     getCfMode: () => mode,
     setCfMode: (m) => (mode = m),

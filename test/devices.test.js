@@ -12,14 +12,7 @@ import { createPocketProxy } from '../lib/proxy.mjs';
 import { createDeviceRegistry, tokenIdOf, parseDeviceName } from '../lib/devices.mjs';
 import { installPocketRpc } from '../lib/web-rpc.js';
 import { POCKET_ENDPOINTS } from '../client/api.js';
-
-function fakeCtxConnection() {
-  let handler = null;
-  return {
-    connection: { rpc: { handle: (_ch, fn) => { handler = fn; return () => { handler = null; }; } } },
-    get handler() { return handler; },
-  };
-}
+import { fakeCtxConnection } from './helpers/fake-rpc-ctx.mjs';
 
 async function tempHome() {
   return mkdtemp(join(tmpdir(), 'dsh-pocket-k-devices-'));
@@ -356,11 +349,8 @@ test('设备 token 必须 CSPRNG：源码无 Math.random 生成残留', () => {
   assert.doesNotMatch(indexSrc, /Math\.random\(\)/, 'index.js 无实际 Math.random 调用（注释已剥离）');
 });
 
-test('RPC：device.* 与 publicBase.* 注册在 loopback-only handler', () => {
-  let opts = null;
-  const ctx = {
-    connection: { rpc: { handle: (_ch, _fn, o) => { opts = o; return () => {}; } } },
-  };
+test('RPC：/dsh-pocket-k 通道仅 loopback 可调（非本机来源 403）', async () => {
+  const ctx = fakeCtxConnection();
   const dispose = installPocketRpc(ctx, {
     service: { status: async () => ({ dshPort: 3080 }) },
     devices: null,
@@ -368,6 +358,12 @@ test('RPC：device.* 与 publicBase.* 注册在 loopback-only handler', () => {
     setPublicBase: () => null,
     clearPublicBase: () => null,
   });
-  assert.equal(opts.authority, 'loopback', '整个 /dsh-pocket-k 通道仅 loopback 可调');
+  // 旧实现把 loopback 要求写在 connection.rpc.handle 的第三参 { authority: 'loopback' }，
+  // 但该参数被官方忽略；现由传输层直接校验来源地址（见 lib/web-rpc.js）。
+  const denied = await ctx.handler(POCKET_ENDPOINTS.status, {}, { remoteAddress: '192.168.1.5' });
+  assert.equal(denied.status, 403, '非 loopback 来源必须被拒');
+  const allowed = await ctx.handler(POCKET_ENDPOINTS.status, {});
+  assert.equal(ctx.lastStatus, 200, 'loopback 来源放行');
+  assert.equal(allowed.ok, true);
   dispose();
 });

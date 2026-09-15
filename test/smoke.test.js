@@ -22,14 +22,41 @@ async function fakeUpstream() {
   return server;
 }
 
-function fakeCtxConnection() {
-  let handler = null;
-  const handle = (channel, fn) => {
-    assert.equal(channel, POCKET_RPC_CHANNEL);
-    handler = fn;
-    return () => { handler = null; };
+/**
+ * 假 ctx.webServer：捕获 installPocketRpc 注册的前缀路由。
+ * （0.1.5 起官方 connection.rpc.handle 对第三方插件不可用，插件改为自注册路由。）
+ */
+function fakeCtxWebServer() {
+  let route = null;
+  const register = (r) => {
+    assert.equal(r.kind, 'prefix');
+    assert.equal(r.path, POCKET_RPC_CHANNEL);
+    route = r;
+    return () => { route = null; };
   };
-  return { rpc: { handle }, get handler() { return handler; } };
+  return { webServer: { register }, get route() { return route; } };
+}
+
+/** 按官方 client 的 wire 协议驱动一次路由请求（POST + client-request 信封）。 */
+async function rpcCall(route, endpoint, payload) {
+  const body = JSON.stringify({ type: 'client-request', rpcId: 'rpc-smoke', method: endpoint, payload });
+  const req = {
+    method: 'POST',
+    url: `${POCKET_RPC_CHANNEL}/${endpoint}`,
+    headers: { 'content-type': 'application/json' },
+    socket: { remoteAddress: '127.0.0.1' },
+    async *[Symbol.asyncIterator]() { yield Buffer.from(body, 'utf8'); },
+    destroy() {},
+  };
+  const state = {};
+  const res = {
+    writeHead: (status) => { state.status = status; },
+    end: (raw) => { state.raw = raw; },
+    on: () => {},
+    get writableEnded() { return state.raw !== undefined; },
+  };
+  await route.handler(req, res);
+  return { status: state.status, envelope: JSON.parse(state.raw) };
 }
 
 test('真实链路：代理转发 + polyfill 注入 + 状态快照（无 stub）', async () => {
@@ -63,11 +90,15 @@ test('真实链路：RPC status 走真实 service（含 restartNotice）', async
   const up = await fakeUpstream();
   const home = await mkdtemp(join(tmpdir(), 'smoke-rpc-'));
   const service = createPocketService({ dshPort: up.address().port, port: 0, home });
-  const conn = fakeCtxConnection();
-  installPocketRpc({ connection: conn }, { service, log: { error() {}, warn() {} } });
+  const ctx = fakeCtxWebServer();
+  installPocketRpc(ctx, { service, log: { error() {}, warn() {} } });
   try {
     await service.startProxy();
-    const r = await conn.handler(POCKET_ENDPOINTS.status, {});
+    const { status, envelope } = await rpcCall(ctx.route, POCKET_ENDPOINTS.status, {});
+    assert.equal(status, 200);
+    assert.equal(envelope.type, 'server-response');
+    assert.equal(envelope.rpcId, 'rpc-smoke');
+    const r = envelope.result;
     assert.equal(r.ok, true);
     assert.equal(r.value.proxyRunning, true);
     assert.ok(r.value.proxyPort > 0);
