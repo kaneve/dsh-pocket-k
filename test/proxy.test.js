@@ -259,7 +259,7 @@ test('HTML 注入：非安全上下文 polyfill 只注入 HTML 文档，不碰 J
   }
 });
 
-test('压缩 HTML（gzip）不注入 polyfill——防止损坏压缩流', async () => {
+test('压缩 HTML（gzip）先解压再注入，并以未压缩形式返回（真实浏览器必带 Accept-Encoding）', async () => {
   const zlib = await import('node:zlib');
   const http = await import('node:http');
   const up = createServer((req, res) => {
@@ -269,9 +269,9 @@ test('压缩 HTML（gzip）不注入 polyfill——防止损坏压缩流', async
   await new Promise((r) => up.listen(0, '127.0.0.1', r));
   const proxy = await createPocketProxy({ port: 0, host: '127.0.0.1', upstream: { host: '127.0.0.1', port: up.address().port } });
   try {
-    // 用原始 http.request（不带 accept-encoding，避免 undici 自动解压）拿真实字节
+    // 用原始 http.request 拿真实字节（带 accept-encoding，模拟真实浏览器）
     const raw = await new Promise((resolve, reject) => {
-      const req = http.request({ host: '127.0.0.1', port: proxy.port, path: '/', headers: { accept: 'text/html' } }, (res) => {
+      const req = http.request({ host: '127.0.0.1', port: proxy.port, path: '/', headers: { accept: 'text/html', 'accept-encoding': 'gzip' } }, (res) => {
         const chunks = [];
         res.on('data', (c) => chunks.push(c));
         res.on('end', () => resolve({ headers: res.headers, body: Buffer.concat(chunks) }));
@@ -279,10 +279,11 @@ test('压缩 HTML（gzip）不注入 polyfill——防止损坏压缩流', async
       req.on('error', reject);
       req.end();
     });
-    assert.equal(raw.headers['content-encoding'], 'gzip', '压缩头原样透传');
-    assert.ok(raw.body[0] === 0x1f && raw.body[1] === 0x8b, '原始字节仍是 gzip（未做文本注入）');
-    assert.ok(!raw.body.toString('utf8').includes('randomUUID'), '压缩流未被注入破坏');
-    assert.ok(zlib.gunzipSync(raw.body).toString('utf8').includes('compressed-page'), '解压后内容完整');
+    assert.equal(raw.headers['content-encoding'], undefined, '解压后必须去掉 content-encoding');
+    const html = raw.body.toString('utf8');
+    assert.ok(html.includes('data-dsh-pocket-k-polyfill="1"'), '压缩 HTML 也要注入 polyfill');
+    assert.ok(html.includes('data-dsh-pocket-k-ws-fallback="1"'), '压缩 HTML 也要注入 WS 回落脚本');
+    assert.ok(html.includes('compressed-page'), '原文内容完整未损坏');
   } finally {
     await proxy.close();
     await new Promise((r) => up.close(r));

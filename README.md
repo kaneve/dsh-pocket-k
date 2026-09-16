@@ -18,7 +18,7 @@
 > 把 **DeepSeek Harness 装进你的口袋**：一个包、一个设置页，手机扫二维码就实时看到电脑上的同一个界面——人在外面也能用。
 
 <p align="center">
-  内部版本 v1.14.2-k1（上游 shaobeichen/dsh-pocket；设置页每次启动时会检查 [GitHub Releases](https://github.com/shaobeichen/dsh-pocket/releases) 最新版并显示）
+  内部版本 v1.15.0-k1（上游 shaobeichen/dsh-pocket；设置页每次启动时会检查 [GitHub Releases](https://github.com/shaobeichen/dsh-pocket/releases) 最新版并显示）
 </p>
 
 ## 这是什么
@@ -147,6 +147,26 @@ npx @deepseek-ai/dsh web
    效果完全一样（人在外面也能用）
 
 **其他可能**：企业防火墙/校园网拦截出站；此时请让 IT 放行或改用热点。
+
+### 现象：界面能打开、会话能加载，但一直 `connection lost, retry #N`
+
+控制台报 `WebSocket connection to 'wss://<你的域名>/api/remote.mux' failed`。
+
+**原因**：DSH 的实时通道是 **WebSocket**（`/api/remote.mux`，DSH 自 `dsh-api-gateway`
+0.1.2-alpha.2 起引入；插件只做透传）。有些网络会掐掉"到该域名的新建 TCP+TLS 连接"
+（例如被按 SNI 阻断的自建域名、只放行 HTTP 的企业网关）：页面与普通 API 请求能靠
+HTTP/2/3 或加密 SNI 幸存，而 WebSocket 必须新建 TCP —— 于是表现为「界面正常、实时通道永远连不上」。
+
+**自动回落（v1.15.0 起，默认开启）**：插件在页面里注入一层 polyfill，**先照常尝试原生
+WebSocket**，只有在"打开前失败"或"超时 2 秒仍未打开"时才改走 **HTTP 隧道**（用
+`text/event-stream` 收帧 + POST 发帧，搬运同一批 mux 帧，走的正是那条能通的 HTTP 路径），
+DSH 客户端完全无感知。
+
+- **诊断开关**：强制走回落 —— 地址后加 `?__pocket_ws=bridge`，或控制台执行
+  `sessionStorage.setItem('__pocketWsBridge','1')` 后刷新（取消：`sessionStorage.removeItem('__pocketWsBridge')`）。
+- **关闭回落**：`createPocketProxy({ wsFallback: false })`（只影响注入脚本，透传逻辑不变）。
+- 顺带修掉一个老问题：**HTML 注入以前对真实浏览器全部失效**（上游回 gzip/br 时注入分支被跳过），
+  现在先解压再注入 —— polyfill、桌面补丁、提示层、回落脚本这才真正生效。
 
 **首次开启时「下载 cloudflared」失败/卡住**：
 - **macOS/Linux**：优先走**清华镜像**（实测 ~3MB/s，几秒下完）；失败自动回退官方 GitHub + 加速源。

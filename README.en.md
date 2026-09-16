@@ -144,6 +144,32 @@ Such tools take over all traffic and often cut cloudflared's tunnel-edge connect
    ```
 4. If the network really can't reach the tunnel, use **LAN mode**: turn on the phone hotspot → connect the computer to it → scan the LAN QR. Same experience, from anywhere.
 
+### Symptom: the UI opens and sessions load, but it keeps saying `connection lost, retry #N`
+
+The console shows `WebSocket connection to 'wss://<your-domain>/api/remote.mux' failed`.
+
+**Why**: DSH's live channel is a **WebSocket** (`/api/remote.mux`, shipped in
+`dsh-api-gateway` 0.1.2-alpha.2 onward; the plugin only relays it). Some networks kill
+*new TCP+TLS connections* to that hostname (e.g. SNI-filtered custom domains, HTTP-only
+corporate gateways): pages and regular API calls survive over HTTP/2-3 or encrypted SNI,
+but a WebSocket must open a fresh TCP connection — so the UI looks fine while the live
+channel can never connect.
+
+**Automatic fallback (v1.15.0, on by default)**: the plugin injects a polyfill that still
+tries the native WebSocket first and only switches to an **HTTP tunnel** (frames received
+over `text/event-stream`, sent with POST — the very same mux frames over the HTTP path that
+works) when the native socket fails before opening or stays unopened for 2s. The DSH client
+never notices.
+
+- **Diagnostic switch**: force the fallback with `?__pocket_ws=bridge` on the URL, or run
+  `sessionStorage.setItem('__pocketWsBridge','1')` in the console and reload (undo with
+  `sessionStorage.removeItem('__pocketWsBridge')`).
+- **Disable the fallback**: `createPocketProxy({ wsFallback: false })` (injection only; the
+  pass-through behaviour is unchanged).
+- Also fixed an old bug: **HTML injection never took effect in real browsers** (the upstream
+  replies gzip/br, so the injection branch was skipped). It now decompresses first — which is
+  what makes the polyfills, desktop patch, notice layer and this fallback actually work.
+
 **Other causes**: corporate firewalls / campus networks blocking outbound — ask IT to allow it, or use a hotspot.
 
 **First run: "Downloading cloudflared" fails or hangs**:
