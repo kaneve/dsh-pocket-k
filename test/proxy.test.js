@@ -477,6 +477,16 @@ test('访问令牌认证（issue #13）：公网需登录、cookie 放行、局�
   const r2 = await raw({ ...publicH, Accept: 'application/json' }, 'GET', undefined, '/api/hello');
   assert.equal(r2.status, 401, 'API 未认证 401');
 
+  // 2b) PWA 静态资源未认证也要放行：浏览器会在未登录/免凭证时抓 manifest 与 favicon，
+  //     被 401 会刷控制台报错，并让"添加到主屏"失败（DSH 直连时这些文件本就公开）
+  for (const assetPath of ['/manifest.webmanifest', '/favicon.svg', '/favicon.ico', '/apple-touch-icon.png', '/icon-192.png']) {
+    const rAsset = await raw({ ...publicH, Accept: '*/*' }, 'GET', undefined, assetPath);
+    assert.equal(rAsset.status, 200, assetPath + ' 未认证应放行');
+  }
+  // 非白名单静态资源仍要密码（防止白名单被滥用）
+  const rAssetDenied = await raw({ ...publicH, Accept: '*/*' }, 'GET', undefined, '/icon-secret.png');
+  assert.equal(rAssetDenied.status, 401, '非白名单资源仍 401');
+
   // 3) 错误密码 → 登录页带错误提示
   const r3 = await raw({ ...publicH, 'Content-Type': 'application/x-www-form-urlencoded' }, 'POST', 'token=00000000', '/pocket-login');
   assert.ok(r3.body.includes('密码错误'), '错误密码提示');
