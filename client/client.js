@@ -113,975 +113,8 @@ function redactStatus(s) {
 
 // client/mobile/components/MobileNavToggle.tsx
 var import_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");
-
-// client/mobile/effects/gesture-guard.ts
-var consumed = /* @__PURE__ */ new Map();
-var strokeLocked = false;
-function markStrokeLocked() {
-  strokeLocked = true;
-}
-function clearStrokeLocked() {
-  strokeLocked = false;
-}
-function isStrokeLocked() {
-  return strokeLocked;
-}
-function isElementLike(value) {
-  return typeof value === "object" && value !== null && "parentElement" in value && value.parentElement !== void 0;
-}
-function markGestureConsumed(target, windowMs, upTo) {
-  const until = performance.now() + windowMs;
-  if (!isElementLike(target)) {
-    consumed.set(target, until);
-    return;
-  }
-  let el = target;
-  while (el !== null) {
-    consumed.set(el, until);
-    if (el === upTo) break;
-    el = isElementLike(el.parentElement) ? el.parentElement : null;
-  }
-}
-function consumeIfGestured(event) {
-  const now = performance.now();
-  const target = event.target;
-  if (!isElementLike(target)) {
-    for (const [t, until] of consumed) {
-      if (until <= now) consumed.delete(t);
-    }
-    return false;
-  }
-  let el = target;
-  while (el !== null) {
-    const until = consumed.get(el);
-    if (until !== void 0) {
-      if (until <= now) {
-        consumed.delete(el);
-      } else {
-        return true;
-      }
-    }
-    el = isElementLike(el.parentElement) ? el.parentElement : null;
-  }
-  return false;
-}
-
-// client/mobile/core/reconciler-core.ts
-function createReconcilerCore(options) {
-  const onError = options.onError ?? ((taskName, error, phase) => {
-    console.error(
-      `[dsh-web-mobile] reconciler task ${taskName}${phase === "dispose" ? " dispose" : ""} failed`,
-      error
-    );
-  });
-  const registered = /* @__PURE__ */ new Set();
-  let active = null;
-  let dirty = /* @__PURE__ */ new Set();
-  let forceAll = false;
-  let pending = null;
-  const runEnsure = (task) => {
-    try {
-      task.ensure();
-    } catch (error) {
-      onError(task.name, error, "ensure");
-    }
-  };
-  const runDispose = (task) => {
-    try {
-      task.dispose();
-    } catch (error) {
-      onError(task.name, error, "dispose");
-    }
-  };
-  const flush = () => {
-    if (pending !== null) {
-      pending();
-      pending = null;
-    }
-    if (active === null) {
-      dirty.clear();
-      forceAll = false;
-      return;
-    }
-    if (forceAll) {
-      for (const task of active) runEnsure(task);
-    } else if (dirty.size > 0) {
-      for (const task of active) {
-        const scopes = task.scopes;
-        if (scopes === void 0 || scopes.some((key) => dirty.has(key))) runEnsure(task);
-      }
-    }
-    dirty.clear();
-    forceAll = false;
-  };
-  const schedule = () => {
-    if (pending !== null) return;
-    pending = options.requestFrame(() => {
-      pending = null;
-      flush();
-    });
-  };
-  const register = (task) => {
-    registered.add(task);
-    if (active !== null) {
-      active.add(task);
-      runEnsure(task);
-    }
-    return () => {
-      registered.delete(task);
-      if (active !== null) {
-        active.delete(task);
-        runDispose(task);
-      }
-    };
-  };
-  const activate = () => {
-    if (active !== null) return;
-    active = new Set(registered);
-    forceAll = true;
-    flush();
-  };
-  const deactivate = () => {
-    if (pending !== null) {
-      pending();
-      pending = null;
-    }
-    dirty.clear();
-    forceAll = false;
-    if (active !== null) {
-      const snapshot = active;
-      active = null;
-      for (const task of snapshot) runDispose(task);
-    }
-  };
-  return {
-    get size() {
-      return registered.size;
-    },
-    register,
-    activate,
-    deactivate,
-    note: (keys) => {
-      for (const key of keys) dirty.add(key);
-      schedule();
-    },
-    flush
-  };
-}
-
-// client/mobile/effects/aionui-compat.ts
-function installAionuiCompat(ctx) {
-  installMobileEffect(ctx, "dsh-web-mobile: aionui explorer close marker", () => {
-    const onChevronClick = (event) => {
-      const target = event.target;
-      if (target === null || !target.closest(".aionui-collapse-chevron")) return;
-      getFrame()?.removeAttribute("data-aionui-explorer-open");
-    };
-    document.addEventListener("click", onChevronClick, true);
-    return () => document.removeEventListener("click", onChevronClick, true);
-  });
-  installMobileEffect(ctx, "dsh-web-mobile: preview sheet open marker", () => {
-    const closePreview = () => {
-      getFrame()?.removeAttribute("data-aionui-preview-open");
-      getFrame()?.removeAttribute("data-mobile-preview-full");
-    };
-    const DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-    const DESKTOP_APPVERSION = "5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-    let restoreTimer = null;
-    let spoofed = false;
-    let originalPlatform = navigator.platform;
-    let originalUserAgent = navigator.userAgent;
-    let originalAppVersion = navigator.appVersion;
-    const restoreNavigator = () => {
-      if (restoreTimer !== null) {
-        window.clearTimeout(restoreTimer);
-        restoreTimer = null;
-      }
-      if (!spoofed) return;
-      spoofed = false;
-      Object.defineProperty(navigator, "platform", { value: originalPlatform, configurable: true });
-      Object.defineProperty(navigator, "userAgent", { value: originalUserAgent, configurable: true });
-      Object.defineProperty(navigator, "appVersion", { value: originalAppVersion, configurable: true });
-    };
-    const spoofDesktop = () => {
-      if (!spoofed) {
-        originalPlatform = navigator.platform;
-        originalUserAgent = navigator.userAgent;
-        originalAppVersion = navigator.appVersion;
-        Object.defineProperty(navigator, "platform", { value: "Win32", configurable: true });
-        Object.defineProperty(navigator, "userAgent", { value: DESKTOP_UA, configurable: true });
-        Object.defineProperty(navigator, "appVersion", { value: DESKTOP_APPVERSION, configurable: true });
-        spoofed = true;
-      }
-      if (restoreTimer !== null) window.clearTimeout(restoreTimer);
-      restoreTimer = window.setTimeout(restoreNavigator, 1e3);
-    };
-    const onTap = (event) => {
-      const target = event.target;
-      if (target === null) return;
-      const row = target.closest('[data-aionui-explorer-col] [class*="_treeRow"]');
-      if (row === null) return;
-      if (row.querySelector('[class*="_treeArrow"]:not([class*="_treeArrowEmpty"])') !== null) return;
-      spoofDesktop();
-      getFrame()?.setAttribute("data-aionui-preview-open", "");
-    };
-    const onCollapse = (event) => {
-      const target = event.target;
-      if (target === null) return;
-      if (target.closest('[data-aionui-preview-col] [class*="_panelCollapse"]') !== null) {
-        closePreview();
-      }
-    };
-    document.addEventListener("click", onTap, true);
-    document.addEventListener("click", onCollapse, true);
-    return () => {
-      restoreNavigator();
-      document.removeEventListener("click", onTap, true);
-      document.removeEventListener("click", onCollapse, true);
-    };
-  });
-  installMobileEffect(ctx, "dsh-web-mobile: explorer availability (issue #48)", () => {
-    const narrow = window.matchMedia("(max-width: 1023px)");
-    if (!narrow.matches) return () => {
-    };
-    const check = () => {
-      const has = document.querySelector("[data-aionui-explorer-col]") !== null;
-      getFrame()?.setAttribute("data-mobile-nav-explorer", has ? "1" : "0");
-    };
-    check();
-    const timer = window.setTimeout(check, 1500);
-    const observer = new MutationObserver(check);
-    observer.observe(document.body, { childList: true, subtree: true });
-    return () => {
-      window.clearTimeout(timer);
-      observer.disconnect();
-    };
-  });
-}
-function createPreviewCloseTask() {
-  return {
-    name: "preview-close-sync",
-    // Only acts when the suite hides the col via inline style. Deliberately
-    // NOT scoped to data-aionui-preview-open: our own open marker is set
-    // before the suite necessarily flips its inline visibility, so waking on
-    // that marker would read the still-hidden style as a "suite close" and
-    // immediately undo the file-row tap.
-    scopes: ["style"],
-    ensure: () => {
-      const pv = document.querySelector("[data-aionui-preview-col]");
-      if (pv === null) return;
-      if (pv.style.visibility === "hidden") {
-        getFrame()?.removeAttribute("data-aionui-preview-open");
-        getFrame()?.removeAttribute("data-mobile-preview-full");
-      }
-    },
-    dispose: () => {
-    }
-  };
-}
-function createSheetRiseTask() {
-  const cols = ["[data-aionui-explorer-col]", "[data-aionui-preview-col]"];
-  const seen = /* @__PURE__ */ new Map();
-  const play = (el) => {
-    el.animate(
-      [
-        { opacity: 0, transform: "translateY(28px)" },
-        { opacity: 1, transform: "none" }
-      ],
-      { duration: 280, easing: "cubic-bezier(.16, 1, .3, 1)", fill: "backwards" }
-    );
-  };
-  return {
-    name: "sheet-rise-replay",
-    // The flush runs on the next frame, by which time React has rendered the
-    // opened col, so the frame markers / inline style / class changes are
-    // reliable triggers — no '*'.
-    scopes: [
-      "style",
-      "class",
-      "data-aionui-explorer-open",
-      "data-aionui-preview-open",
-      "data-mobile-preview-full"
-    ],
-    ensure: () => {
-      for (const sel of cols) {
-        const el = document.querySelector(sel);
-        if (el === null) continue;
-        const visible = getComputedStyle(el).visibility === "visible";
-        const prev = seen.get(sel) ?? false;
-        if (visible && !prev) play(el);
-        seen.set(sel, visible);
-      }
-    },
-    dispose: () => {
-      seen.clear();
-    }
-  };
-}
-
-// client/mobile/effects/stats-line.ts
-var SEP_SPLIT = /\s*[·．]\s*|(?<![0-9])\.(?![0-9])|(?<!\d)\.(?=\d)/;
-var TTFT_ZH = /^首\s*token\s*平均/;
-var TTFT_EN = /^TTFT\s+avg/i;
-function compactGroup(text, lang) {
-  const trimmed = text.trim();
-  if (trimmed === "") return "";
-  const parts = trimmed.split(SEP_SPLIT).map((part) => part.trim()).filter(Boolean);
-  const zh3 = lang === "zh";
-  if (zh3 ? /[轮步]/.test(trimmed) : /\b(turns|steps)\b/i.test(trimmed)) {
-    if (zh3) return parts.map((part) => part.replace(/\s+/g, "")).join("");
-    return parts.join(" ");
-  }
-  if (zh3 ? /(LLM|工具调用)/.test(trimmed) : /(LLM|Tool call)/i.test(trimmed)) {
-    const mapped = parts.map((part) => {
-      let out = part;
-      if (zh3) out = out.replace(/LLM/, "\u6A21\u578B").replace(/工具调用\s*/, "\u5DE5\u5177");
-      else out = out.replace(/Tool call/i, "Tool");
-      return out.trim();
-    }).filter(Boolean);
-    return mapped.join(" ");
-  }
-  if (zh3 ? /(首\s*token|tok\/s)/.test(trimmed) : /(TTFT|tok\/s)/i.test(trimmed)) {
-    const mapped = parts.filter((part) => !(zh3 ? TTFT_ZH : TTFT_EN).test(part)).map((part) => part.replace(/tok\/s/g, "t/s").trim()).filter(Boolean);
-    return mapped.join(" \xB7 ");
-  }
-  if (zh3 ? /缓存命中/.test(trimmed) : /Cache hit/i.test(trimmed)) {
-    let out = trimmed;
-    if (zh3) out = out.replace(/缓存命中/, "\u7F13\u4E2D");
-    else out = out.replace(/Cache hit/i, "Cache");
-    return out.trim();
-  }
-  if (zh3 ? /(输入|输出|tok)/.test(trimmed) : /(Input|Output|tok)/i.test(trimmed)) {
-    const mapped = parts.map((part) => {
-      let out = part;
-      if (zh3) out = out.replace(/输入\s*/, "\u5165 ").replace(/输出\s*/, "\u51FA");
-      else out = out.replace(/Input/i, "In").replace(/Output/i, "Out");
-      out = out.replace(/\btok\b/g, "t");
-      return out.trim();
-    }).filter(Boolean);
-    return mapped.join(zh3 ? " . " : " \xB7 ");
-  }
-  return trimmed;
-}
-function isStatsGroup(el) {
-  return el.nodeType === 1 && el.tagName === "SPAN" && el.getAttribute("aria-hidden") !== "true";
-}
-function removeStatsGroup(group) {
-  const prev = group.previousSibling;
-  if (prev !== null && prev.nodeType === 3 && /^\s*$/.test(prev.textContent ?? "") && prev.previousSibling !== null && prev.previousSibling.nodeType === 1 && prev.previousSibling.getAttribute("aria-hidden") === "true") {
-    prev.previousSibling.remove();
-    prev.remove();
-    group.remove();
-    return;
-  }
-  const next = group.nextSibling;
-  if (next !== null && next.nodeType === 3 && /^\s*$/.test(next.textContent ?? "") && next.nextSibling !== null && next.nextSibling.nodeType === 1 && next.nextSibling.getAttribute("aria-hidden") === "true") {
-    next.nextSibling.remove();
-    next.remove();
-    group.remove();
-    return;
-  }
-  group.remove();
-}
-function compactStats(stats) {
-  const lang = /[\u4e00-\u9fff]/.test(stats.textContent ?? "") ? "zh" : "en";
-  for (const group of Array.from(stats.children).filter(isStatsGroup)) {
-    const original = group.textContent ?? "";
-    if (original.trim() === "") continue;
-    const compacted = compactGroup(original, lang);
-    if (compacted === "") {
-      removeStatsGroup(group);
-    } else if (compacted !== original) {
-      group.textContent = compacted;
-    }
-  }
-  for (const el of Array.from(stats.children)) {
-    if (el.children.length === 0 && /^TPS\s+\d/.test((el.textContent ?? "").trim())) {
-      const text = el.textContent ?? "";
-      const compacted = text.replace(/tok\/s/g, "t/s");
-      if (compacted !== text) el.textContent = compacted;
-    }
-  }
-}
-function statsAnchorAlive(el) {
-  if (el === null || !el.isConnected) return false;
-  if (el.closest("[data-phase]") === null) return false;
-  return el.closest('[class*="_composerStack"]') !== null;
-}
-function createStatsLineTask() {
-  let tpsOrigin = null;
-  const moveTps = (stats) => {
-    if ([...stats.children].some((c) => /^TPS\s+\d/.test((c.textContent ?? "").trim()))) return;
-    const stack = stats.closest('[class*="_composerStack"]');
-    if (stack === null) return;
-    for (const el of stack.querySelectorAll("div")) {
-      const text = (el.textContent ?? "").trim();
-      if (!/^TPS\s+\d/.test(text)) continue;
-      if (el.children.length > 0) continue;
-      if (el.parentElement !== null) {
-        tpsOrigin = { parent: el.parentElement, next: el.nextSibling };
-      }
-      stats.appendChild(el);
-      return;
-    }
-  };
-  const mark = () => {
-    const anchor = document.querySelector('[data-mobile-nav="stats"]');
-    if (anchor !== null && statsAnchorAlive(anchor)) {
-      moveTps(anchor);
-      return;
-    }
-    anchor?.removeAttribute("data-mobile-nav");
-    for (const root of document.querySelectorAll('[data-phase] [class*="_root"]')) {
-      if (root.closest('[class*="_composerStack"]') === null) continue;
-      if (root.matches('[data-testid="todo-panel"]')) continue;
-      if (root.querySelector("button") !== null) continue;
-      const text = root.textContent ?? "";
-      if (!/(turns|steps|\bLLM\b|轮|步)/.test(text)) continue;
-      if (root.querySelector("textarea, [data-composer-input]") !== null) continue;
-      root.setAttribute("data-mobile-nav", "stats");
-      moveTps(root);
-      compactStats(root);
-      return;
-    }
-  };
-  return {
-    name: "stats-line",
-    scopes: ["*"],
-    ensure: mark,
-    dispose: () => {
-      if (tpsOrigin !== null && tpsOrigin.parent.isConnected) {
-        for (const stats of document.querySelectorAll('[data-mobile-nav="stats"]')) {
-          const tps = [...stats.querySelectorAll("div")].find(
-            (el) => el.children.length === 0 && /^TPS\s+\d/.test((el.textContent ?? "").trim())
-          );
-          if (tps !== void 0) {
-            tpsOrigin.parent.insertBefore(tps, tpsOrigin.next);
-            break;
-          }
-        }
-      }
-      for (const el of document.querySelectorAll('[data-mobile-nav="stats"]')) {
-        el.removeAttribute("data-mobile-nav");
-      }
-      tpsOrigin = null;
-    }
-  };
-}
-
-// client/mobile/effects/preview-fullscreen.ts
-function createPreviewFullscreenTask(t) {
-  let button = null;
-  const syncLabel = (target) => {
-    const full = getFrame()?.hasAttribute("data-mobile-preview-full") ?? false;
-    const label = t(full ? "previewExitFullscreen" : "previewFullscreen");
-    if (target.getAttribute("aria-label") === label) return;
-    target.setAttribute("aria-label", label);
-    target.title = label;
-  };
-  const onClick = () => {
-    getFrame()?.toggleAttribute("data-mobile-preview-full");
-    if (button !== null) syncLabel(button);
-  };
-  return {
-    name: "preview-fullscreen-toggle",
-    scopes: ["data-aionui-preview-open", "data-mobile-preview-full"],
-    ensure: () => {
-      const col = document.querySelector("[data-aionui-preview-col]");
-      if (col === null) return;
-      if (button === null) {
-        button = document.createElement("button");
-        button.type = "button";
-        button.dataset.mobileNav = "preview-full-toggle";
-        button.innerHTML = [
-          '<svg class="dsh-web-mobile-full-in" viewBox="0 0 16 16" fill="none" aria-hidden="true">',
-          '<path d="M6 2H2v4M10 2h4v4M6 14H2v-4M10 14h4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
-          "</svg>",
-          '<svg class="dsh-web-mobile-full-out" viewBox="0 0 16 16" fill="none" aria-hidden="true">',
-          '<path d="M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
-          "</svg>"
-        ].join("");
-        button.addEventListener("click", onClick);
-      }
-      syncLabel(button);
-      if (button.parentElement !== col) col.appendChild(button);
-    },
-    dispose: () => {
-      button?.remove();
-      button = null;
-    }
-  };
-}
-
-// client/mobile/effects/git-chip-reparent.ts
-function createGitChipTask() {
-  return {
-    name: "git-chip-reparent",
-    scopes: ["*"],
-    ensure: () => {
-      const chip = document.querySelector('[data-slot="conversation.input.dock"] [data-gitgraph-chip-anchor]');
-      if (chip === null) return;
-      const card = document.querySelector("[data-composer-input], textarea")?.closest('[class*="_card"]');
-      if (card == null) return;
-      if (chip.parentElement !== card) card.insertBefore(chip, card.firstChild);
-    },
-    dispose: () => {
-      const chip = document.querySelector('[data-slot="conversation.input.dock"] [data-gitgraph-chip-anchor]');
-      const dock = document.querySelector('[data-slot="conversation.input.dock"]');
-      if (chip !== null && dock !== null && chip.parentElement !== dock) dock.appendChild(chip);
-    }
-  };
-}
-
-// client/mobile/effects/settings-toolbar-reparent.ts
-function createSettingsToolbarTask() {
-  let origin = null;
-  return {
-    name: "settings-toolbar-reparent",
-    scopes: ["*"],
-    ensure: () => {
-      const dialog = document.querySelector('[aria-modal="true"]');
-      if (dialog === null) return;
-      const nav = dialog.querySelector(':scope > [class*="_nav"]');
-      const header = dialog.querySelector('[class*="_header"]:not([class*="_headerActions"])');
-      if (nav === null || header === null) return;
-      if (header.parentElement === nav) return;
-      if (header.parentElement !== null) {
-        origin = { parent: header.parentElement, next: header.nextSibling };
-      }
-      nav.appendChild(header);
-    },
-    dispose: () => {
-      if (origin === null) return;
-      const header = document.querySelector('[aria-modal="true"] [class*="_header"]:not([class*="_headerActions"])');
-      if (header !== null && origin.parent.isConnected) {
-        origin.parent.insertBefore(header, origin.next);
-      }
-      origin = null;
-    }
-  };
-}
-
-// client/mobile/effects/overlay-backdrop-fab.ts
-function fadeOverlayOut() {
-  fadeHook?.();
-}
-var fadeHook = null;
-var BACKDROP_FADE_MS = 200;
-function createOverlayTask(t, toggleSidebar) {
-  let backdrop = null;
-  let fab = null;
-  let backdropRemoveTimer = null;
-  let faded = false;
-  const drawerOpen2 = () => {
-    const frame = getFrame();
-    return frame !== null && !frame.hasAttribute("data-sidebar-collapsed");
-  };
-  const heroPhase = () => document.querySelector('[data-phase="active"]') === null;
-  fadeHook = () => {
-    if (backdrop === null) return;
-    faded = true;
-    backdrop.style.pointerEvents = "none";
-    backdrop.style.opacity = "0";
-  };
-  return {
-    name: "overlay-backdrop-fab",
-    scopes: ["*", "data-sidebar-collapsed", "data-phase"],
-    ensure: () => {
-      const frame = getFrame();
-      if (frame === null) return;
-      if (drawerOpen2()) {
-        if (backdrop === null) {
-          backdrop = document.createElement("div");
-          backdrop.dataset.mobileNav = "backdrop";
-          backdrop.setAttribute("role", "button");
-          backdrop.setAttribute("aria-label", t("backdrop"));
-          backdrop.addEventListener("click", toggleSidebar);
-          frame.appendChild(backdrop);
-          faded = false;
-        } else if (faded && backdropRemoveTimer !== null) {
-          window.clearTimeout(backdropRemoveTimer);
-          backdropRemoveTimer = null;
-          faded = false;
-          backdrop.style.removeProperty("pointer-events");
-          backdrop.style.removeProperty("opacity");
-        }
-      } else if (backdrop !== null) {
-        backdrop.style.pointerEvents = "none";
-        backdrop.style.opacity = "0";
-        faded = true;
-        if (backdropRemoveTimer === null) {
-          backdropRemoveTimer = window.setTimeout(() => {
-            backdropRemoveTimer = null;
-            backdrop?.remove();
-            backdrop = null;
-          }, BACKDROP_FADE_MS + 60);
-        }
-      }
-      if (heroPhase() && !drawerOpen2() && fab === null) {
-        fab = document.createElement("button");
-        fab.type = "button";
-        fab.dataset.mobileNav = "fab";
-        fab.setAttribute("aria-label", t("open"));
-        fab.title = t("open");
-        fab.innerHTML = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true" width="18" height="18"><path fill-rule="evenodd" clip-rule="evenodd" d="M9.67272 0.522841C10.8339 0.522841 11.76 0.522714 12.4963 0.602493C13.2453 0.683657 13.8789 0.854248 14.4264 1.25197C14.7504 1.48739 15.0355 1.77247 15.2709 2.0965C15.6686 2.64394 15.8392 3.27758 15.9204 4.02655C16.0002 4.7629 16 5.68895 16 6.85014V9.14986C16 10.3111 16.0002 11.2371 15.9204 11.9735C15.8392 12.7224 15.6686 13.3561 15.2709 13.9035C15.0355 14.2275 14.7504 14.5126 14.4264 14.748C13.8789 15.1458 13.2453 15.3163 12.4963 15.3975C11.76 15.4773 10.8339 15.4772 9.67272 15.4772H6.3273C5.16611 15.4772 4.24006 15.4773 3.50371 15.3975C2.75474 15.3163 2.1211 15.1458 1.57366 14.748C1.24963 14.5126 0.964549 14.2275 0.729131 13.9035C0.331407 13.3561 0.160817 12.7224 0.0796529 11.9735C-0.000126137 11.2371 1.25338e-09 10.3111 1.25338e-09 9.14986V6.85014C1.25329e-09 5.68895 -0.000126137 4.7629 0.0796529 4.02655C0.160817 3.27758 0.331407 2.64394 0.729131 2.0965C0.964549 1.77247 1.24963 1.48739 1.57366 1.25197C2.1211 0.854248 2.75474 0.683657 3.50371 0.602493C4.24006 0.522714 5.16611 0.522841 6.3273 0.522841H9.67272ZM5.54303 1.88715V14.1118C5.78636 14.1128 6.04709 14.1169 6.3273 14.1169H9.67272C10.8639 14.1169 11.7032 14.1164 12.3493 14.0465C12.9824 13.9779 13.3497 13.8494 13.6268 13.6482C13.8354 13.4966 14.0195 13.3125 14.1711 13.1039C14.3723 12.8268 14.5007 12.4595 14.5693 11.8264C14.6393 11.1803 14.6398 10.341 14.6398 9.14986V6.85014C14.6398 5.65896 14.6393 4.81967 14.5693 4.1736C14.5007 3.54048 14.3723 3.17318 14.1711 2.89609C14.0195 2.68747 13.8354 2.50337 13.6268 2.35179C13.3497 2.1506 12.9824 2.02212 12.3493 1.95353C11.7032 1.88358 10.8639 1.88307 9.67272 1.88307H6.3273C6.04709 1.88307 5.78636 1.8862 5.54303 1.88715ZM4.1828 1.91166C3.99125 1.9216 3.8148 1.93577 3.65076 1.95353C3.01764 2.02212 2.65034 2.1506 2.37325 2.35179C2.16463 2.50337 1.98052 2.68747 1.82895 2.89609C1.62776 3.17318 1.49928 3.54048 1.43069 4.1736C1.36074 4.81967 1.36023 5.65896 1.36023 6.85014V9.14986C1.36023 10.341 1.36074 11.1803 1.43069 11.8264C1.49928 12.4595 1.62776 12.8268 1.82895 13.1039C1.98052 13.3125 2.16463 13.4966 2.37325 13.6482C2.65034 13.8494 3.01764 13.9779 3.65076 14.0465C4.29683 14.1164 5.13612 14.1169 6.3273 14.1169H9.67272C10.8639 14.1169 11.7032 14.1164 12.3493 14.0465C12.9824 13.9779 13.3497 13.8494 13.6268 13.6482C13.8354 13.4966 14.0195 13.3125 14.1711 13.1039C14.3723 12.8268 14.5007 12.4595 14.5693 11.8264C14.6393 11.1803 14.6398 10.341 14.6398 9.14986V6.85014C14.6398 5.65896 14.6393 4.81967 14.5693 4.1736C14.5007 3.54048 14.3723 3.17318 14.1711 2.89609C14.0195 2.68747 13.8354 2.50337 13.6268 2.35179C13.3497 2.1506 12.9824 2.02212 12.3493 1.95353C11.7032 1.88358 10.8639 1.88307 9.67272 1.88307H6.3273C5.13612 1.88307 4.29683 1.88358 3.65076 1.95353C3.47672 1.97129 3.30027 1.98546 3.10872 1.9954L4.1828 1.91166Z" fill="currentColor"/></svg>';
-        fab.addEventListener("click", toggleSidebar);
-        frame.appendChild(fab);
-      } else if ((!heroPhase() || drawerOpen2()) && fab !== null) {
-        fab.remove();
-        fab = null;
-      }
-    },
-    dispose: () => {
-      if (backdropRemoveTimer !== null) {
-        window.clearTimeout(backdropRemoveTimer);
-        backdropRemoveTimer = null;
-      }
-      fadeHook = null;
-      backdrop?.remove();
-      backdrop = null;
-      fab?.remove();
-      fab = null;
-    }
-  };
-}
-
-// client/mobile/effects/file-viewer-compat.ts
-function createFileViewerMarkerTask() {
-  return {
-    name: "file-viewer-open-marker",
-    scopes: ["*"],
-    ensure: () => {
-      const frame = getFrame();
-      if (frame === null) return;
-      const active = document.querySelector(".dsfv-panel") !== null;
-      if (active) {
-        frame.setAttribute("data-file-viewer-open", "");
-      } else if (frame.hasAttribute("data-file-viewer-open")) {
-        frame.removeAttribute("data-file-viewer-open");
-      }
-    },
-    dispose: () => {
-      getFrame()?.removeAttribute("data-file-viewer-open");
-    }
-  };
-}
-
-// client/mobile/effects/phone-chrome.ts
-var NS = "mobileNav";
-var MOBILE_QUERY = "(max-width: 1023px) and (pointer: coarse)";
-var DESKTOP_QUERY = "(min-width: 1024px)";
-var TOUCH_QUERY = "(pointer: coarse)";
-function installMobileEffect(ctx, label, install, query = MOBILE_QUERY) {
-  ctx.effect(() => {
-    const narrow = window.matchMedia(query);
-    let cleanup;
-    const arm = () => {
-      cleanup?.();
-      cleanup = narrow.matches ? install(narrow) : void 0;
-    };
-    arm();
-    narrow.addEventListener("change", arm);
-    return () => {
-      narrow.removeEventListener("change", arm);
-      cleanup?.();
-    };
-  }, label);
-}
-function findFrame() {
-  return document.querySelector("[data-shell-overlay]")?.parentElement ?? null;
-}
-function getFrame() {
-  return document.querySelector('[data-mobile-nav="frame"]') ?? findFrame();
-}
-function installFrameController() {
-  if (frameControllerInstalled) return () => {
-  };
-  frameControllerInstalled = true;
-  let frame = null;
-  const removeTask = addReconcilerTask({
-    name: "frame-marker",
-    scopes: ["*"],
-    ensure: () => {
-      frame = findFrame();
-      if (frame !== null && !frame.hasAttribute("data-mobile-nav")) {
-        frame.setAttribute("data-mobile-nav", "frame");
-      }
-    },
-    dispose: () => {
-      if (frame !== null) {
-        frame.removeAttribute("data-mobile-nav");
-        frame.removeAttribute("data-mobile-preview-full");
-        frame.removeAttribute("data-aionui-explorer-open");
-        frame.removeAttribute("data-aionui-preview-open");
-      }
-      frame = null;
-    }
-  });
-  return () => {
-    removeTask();
-    frameControllerInstalled = false;
-  };
-}
-var frameControllerInstalled = false;
-var reconcileTasksRegistered = false;
-var reconcilerInstalled = false;
-var core = createReconcilerCore({
-  requestFrame: (flush) => {
-    let id = 0;
-    const run = () => {
-      id = 0;
-      flush();
-    };
-    id = requestAnimationFrame(run);
-    return () => {
-      if (id !== 0) cancelAnimationFrame(id);
-    };
-  }
-});
-function installReconciler(ctx) {
-  if (reconcilerInstalled) return () => {
-  };
-  reconcilerInstalled = true;
-  installMobileEffect(ctx, "dsh-web-mobile: DOM reconciler", () => {
-    const observer = new MutationObserver((records) => {
-      const keys = /* @__PURE__ */ new Set();
-      for (const record of records) {
-        keys.add(
-          record.type === "attributes" && record.attributeName !== null ? record.attributeName : "*"
-        );
-      }
-      core.note(keys);
-    });
-    observer.observe(document.documentElement, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: [
-        "style",
-        "class",
-        "data-phase",
-        "data-sidebar-collapsed",
-        "data-aionui-explorer-open",
-        "data-aionui-preview-open",
-        "data-mobile-preview-full"
-      ]
-    });
-    core.activate();
-    return () => {
-      observer.disconnect();
-      core.deactivate();
-    };
-  });
-  return () => {
-    reconcilerInstalled = false;
-  };
-}
-function addReconcilerTask(task) {
-  return core.register(task);
-}
-function detectIosWebKit(nav, supports) {
-  if (supports !== null) {
-    try {
-      if (supports("(font: -apple-system-body) and (-webkit-touch-callout: none)")) return true;
-    } catch {
-    }
-  }
-  const ua = nav.userAgent;
-  if (/iP(hone|ad|od)/.test(ua)) return true;
-  return /Macintosh/.test(ua) && nav.maxTouchPoints > 1;
-}
-var IOS_MARKER = "data-mobile-nav-ios";
-var VIEWPORT_CONTENT = "width=device-width, initial-scale=1, viewport-fit=cover";
-var findViewportMeta = () => document.querySelector('meta[name="viewport"]');
-function installPhoneChrome(ctx) {
-  installMobileEffect(ctx, "dsh-web-mobile: status bar theme + viewport + zoom guard", () => {
-    const themeMeta = document.createElement("meta");
-    themeMeta.name = "theme-color";
-    const bodyBg = () => getComputedStyle(document.body).backgroundColor;
-    const root = document.documentElement;
-    let originalViewport = null;
-    let observedMeta = null;
-    let applying = false;
-    const assertViewport = () => {
-      const viewport = findViewportMeta();
-      if (viewport === null) return;
-      if (originalViewport === null) originalViewport = viewport.content;
-      if (applying || viewport.content === VIEWPORT_CONTENT) return;
-      applying = true;
-      viewport.content = VIEWPORT_CONTENT;
-      applying = false;
-    };
-    const metaObserver = new MutationObserver(assertViewport);
-    const attachMetaObserver = () => {
-      const viewport = findViewportMeta();
-      if (viewport === observedMeta) return;
-      if (observedMeta !== null) metaObserver.disconnect();
-      observedMeta = viewport;
-      if (viewport !== null) {
-        metaObserver.observe(viewport, { attributes: true, attributeFilter: ["content"] });
-      }
-    };
-    const headObserver = new MutationObserver(() => {
-      attachMetaObserver();
-      assertViewport();
-    });
-    headObserver.observe(document.head, { childList: true });
-    attachMetaObserver();
-    assertViewport();
-    const observer = new MutationObserver(() => {
-      themeMeta.content = bodyBg();
-    });
-    observer.observe(document.body, { attributes: true, attributeFilter: ["data-ds-dark-theme"] });
-    const cssSupports = typeof CSS !== "undefined" && typeof CSS.supports === "function" ? (condition) => CSS.supports(condition) : null;
-    if (detectIosWebKit(navigator, cssSupports)) root.setAttribute(IOS_MARKER, "");
-    themeMeta.content = bodyBg();
-    if (themeMeta.parentElement === null) document.head.appendChild(themeMeta);
-    return () => {
-      metaObserver.disconnect();
-      headObserver.disconnect();
-      observer.disconnect();
-      const viewport = findViewportMeta();
-      if (viewport !== null && originalViewport !== null && viewport.content === VIEWPORT_CONTENT) {
-        viewport.content = originalViewport;
-      }
-      themeMeta.remove();
-      root.removeAttribute(IOS_MARKER);
-    };
-  });
-}
-function installOverlayInteractions(ctx) {
-  installMobileEffect(ctx, "dsh-web-mobile: drawer close (Escape + navigate)", () => {
-    const toggleSidebar = () => ctx.layout.toggleSidebar();
-    const drawerOpen2 = () => {
-      const frame = getFrame();
-      return frame !== null && !frame.hasAttribute("data-sidebar-collapsed");
-    };
-    const onKeyDown = (event) => {
-      if (event.key !== "Escape") return;
-      if (document.querySelector('[aria-modal="true"]') !== null) return;
-      if (drawerOpen2()) toggleSidebar();
-    };
-    const drawerRoot = () => document.querySelector('[data-mobile-nav="frame"] > :first-child');
-    const shouldCloseOnTapInsideDrawer = (target) => {
-      if (document.querySelector('[aria-modal="true"]') !== null) return false;
-      if (!drawerOpen2()) return false;
-      if (!(target instanceof Element)) return false;
-      const drawer = drawerRoot();
-      if (drawer === null || !drawer.contains(target)) return false;
-      if (target.closest('[class*="sessionRow"] button') !== null) return false;
-      return target.closest(
-        'button[data-dsh-taskboard-entry], button[data-dsh-ssh-entry], [class*="newSession"], [class*="sessionRow"], [class*="searchResultRow"], [class*="searchResultWorkspace"], [class*="usg_"]'
-      ) !== null;
-    };
-    let lastTouchNavAt = 0;
-    let navSignatureAtArm = "";
-    let navObserver = null;
-    let navTimer = null;
-    const selectedRowSignature = () => {
-      const selected = drawerRoot()?.querySelector('[role="treeitem"][aria-selected="true"]');
-      const title = selected?.querySelector('[class*="_title"]');
-      return title?.textContent?.trim() ?? null;
-    };
-    const disarmNav = () => {
-      navObserver?.disconnect();
-      navObserver = null;
-      if (navTimer !== null) window.clearTimeout(navTimer);
-      navTimer = null;
-      navSignatureAtArm = "";
-    };
-    const armNav = () => {
-      disarmNav();
-      navSignatureAtArm = selectedRowSignature() ?? "";
-      const root = drawerRoot();
-      if (root === null) return;
-      navObserver = new MutationObserver(() => {
-        if (!drawerOpen2()) {
-          disarmNav();
-          return;
-        }
-        const signature = selectedRowSignature();
-        if (signature !== null && signature !== navSignatureAtArm) {
-          disarmNav();
-          toggleSidebar();
-        }
-      });
-      navObserver.observe(root, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ["aria-selected"]
-      });
-      navTimer = window.setTimeout(disarmNav, 2e3);
-    };
-    const onDrawerClick = (event) => {
-      if (isStrokeLocked() || consumeIfGestured(event)) return;
-      if (performance.now() - lastTouchNavAt < 500) return;
-      if (shouldCloseOnTapInsideDrawer(event.target)) toggleSidebar();
-    };
-    const onDrawerPointerUp = (event) => {
-      if (isStrokeLocked() || consumeIfGestured(event)) return;
-      if (event.pointerType !== "touch" && event.pointerType !== "pen") return;
-      const target = event.target;
-      if (!(target instanceof Element)) return;
-      if (!shouldCloseOnTapInsideDrawer(target)) return;
-      const row = target.closest('[role="treeitem"]');
-      if (row !== null) {
-        lastTouchNavAt = performance.now();
-        if (row.getAttribute("aria-selected") === "true") {
-          toggleSidebar();
-        } else {
-          armNav();
-        }
-        return;
-      }
-      toggleSidebar();
-    };
-    document.addEventListener("keydown", onKeyDown, true);
-    document.addEventListener("click", onDrawerClick, true);
-    document.addEventListener("pointerup", onDrawerPointerUp, true);
-    return () => {
-      disarmNav();
-      document.removeEventListener("keydown", onKeyDown, true);
-      document.removeEventListener("click", onDrawerClick, true);
-      document.removeEventListener("pointerup", onDrawerPointerUp, true);
-    };
-  });
-}
-function registerReconcileTasks(ctx) {
-  if (reconcileTasksRegistered) return () => {
-  };
-  reconcileTasksRegistered = true;
-  const t = ctx.locale.bind(NS);
-  const removeTasks = [
-    addReconcilerTask(createPreviewFullscreenTask(t)),
-    addReconcilerTask(createGitChipTask()),
-    addReconcilerTask(createSettingsToolbarTask()),
-    addReconcilerTask(createPreviewCloseTask()),
-    addReconcilerTask(createSheetRiseTask()),
-    addReconcilerTask(createStatsLineTask()),
-    addReconcilerTask(createOverlayTask(t, () => ctx.layout.toggleSidebar())),
-    addReconcilerTask(createFileViewerMarkerTask())
-  ];
-  return () => {
-    for (const remove of removeTasks) remove();
-    reconcileTasksRegistered = false;
-  };
-}
-
-// client/mobile/components/MobileNavToggle.tsx
 function MobileNavToggle({ toggleSidebar, t }) {
-  const toggleExplorer = () => {
-    const frame = getFrame();
-    if (frame === null) return;
-    if (frame.hasAttribute("data-aionui-explorer-open")) {
-      frame.removeAttribute("data-aionui-explorer-open");
-    } else {
-      frame.removeAttribute("data-aionui-preview-open");
-      frame.setAttribute("data-aionui-explorer-open", "");
-    }
-  };
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement(
     "button",
     {
       type: "button",
@@ -1091,40 +124,14 @@ function MobileNavToggle({ toggleSidebar, t }) {
       onClick: () => toggleSidebar()
     },
     /* @__PURE__ */ React.createElement(import_dsh_client_ui_primitives.IconPanelLeftOutline16, { size: 16 })
-  ), /* @__PURE__ */ React.createElement(
-    "button",
-    {
-      type: "button",
-      "data-mobile-nav": "files",
-      "aria-label": t("files"),
-      title: t("files"),
-      onClick: toggleExplorer
-    },
-    /* @__PURE__ */ React.createElement(import_dsh_client_ui_primitives.IconFolderOpenOutline16, { size: 16 })
-  ));
+  );
 }
 
 // client/mobile/components/MobileDrawerFooter.tsx
 var import_dsh_client_ui_primitives2 = require("@deepseek-ai/dsh-client-ui-primitives");
-function MobileDrawerFooter({ useSessions, downloadSessionLog, toggleSidebar, t }) {
+function MobileDrawerFooter({ useSessions, downloadSessionLog, t }) {
   const sessionId = useSessions((state) => state.current);
-  const openExplorer = () => {
-    getFrame()?.removeAttribute("data-aionui-preview-open");
-    getFrame()?.setAttribute("data-aionui-explorer-open", "");
-    toggleSidebar();
-  };
   return /* @__PURE__ */ React.createElement("div", { "data-mobile-nav": "drawer-actions" }, /* @__PURE__ */ React.createElement(
-    "button",
-    {
-      type: "button",
-      "data-mobile-nav": "explorer",
-      "aria-label": t("files"),
-      title: t("files"),
-      onClick: openExplorer
-    },
-    /* @__PURE__ */ React.createElement(import_dsh_client_ui_primitives2.IconPanelLeftOutline16, { size: 14 }),
-    /* @__PURE__ */ React.createElement("span", null, t("files"))
-  ), /* @__PURE__ */ React.createElement(
     "button",
     {
       type: "button",
@@ -2288,6 +1295,16 @@ var COMPAT_CSS = `@media (max-width: 1023px) and (pointer: coarse) {
      \u79FB\u52A8\u7AEF\u300C\u6587\u4EF6\u6D4F\u89C8\u300D\u5165\u53E3\uFF08header \u56FE\u6807 + drawer footer \u9879\uFF09\u2014\u2014\u4E0D\u7136\u70B9\u4E86\u6CA1\u53CD\u5E94\u3002 */
   [data-mobile-nav-explorer="0"] [data-mobile-nav="files"],
   [data-mobile-nav-explorer="0"] [data-mobile-nav="explorer"] {
+    display: none !important;
+  }
+  /* ---------- \u5BBF\u4E3B\u300C\u6253\u5F00\u65B9\u5F0F\u300D\u4E0B\u62C9\uFF08Explorer / Git Bash / VS Code \u2026\uFF09 ----------
+     \u8BE5\u63A7\u4EF6\u7531 @deepseek-ai/dsh-client-ui-open-in-app \u6CE8\u518C\u8FDB
+     conversation.session.header.utilities\uFF08split \u4E3B\u6309\u94AE + chevron \u4E0B\u62C9\uFF09\uFF0C\u662F\u684C\u9762
+     \u4E0A\u300C\u628A\u9879\u76EE\u5728\u672C\u5730\u5E94\u7528\u91CC\u6253\u5F00\u300D\u7684\u5165\u53E3\uFF0C\u624B\u673A\u4E0A\u7528\u4E0D\u5230\u8FD8\u6324\u5360\u4F1A\u8BDD\u5934\u90E8 \u2014\u2014 \u6309 slot
+     \u7CBE\u786E\u5B9A\u4F4D\u540E\u6574\u5757\u9690\u85CF\uFF08\u4E0D\u9690\u85CF\u6574\u4E2A slot\uFF1Asession-log-export \u7B49\u4E5F\u6CE8\u518C\u5728\u8FD9\u91CC\uFF09\u3002
+     class \u662F CSS Module \u54C8\u5E0C\uFF0C_split \u662F\u5B83\u7684\u6A21\u5757\u952E\u540D\uFF1B\u8BE5 slot \u5185\u53EA\u6709\u8FD9\u4E2A\u63A7\u4EF6\u7528
+     split \u7ED3\u6784\uFF08deliverables / trajectory \u7684 split \u4E0D\u5728\u6B64 slot\uFF09\u3002 */
+  [data-mobile-nav="frame"] [data-slot="conversation.session.header.utilities"] div[class*="_split"] {
     display: none !important;
   }
   /* Explorer (file tree) bottom sheet: bottom edge aligned exactly with
@@ -3566,6 +2583,961 @@ var MISC_CSS = `@media (max-width: 1023px) and (pointer: coarse) {
 // client/mobile/styles/index.ts
 var MOBILE_CSS = [BASE_CSS, LAYOUT_CSS, COMPAT_CSS, MISC_CSS].join("\n");
 
+// client/mobile/effects/gesture-guard.ts
+var consumed = /* @__PURE__ */ new Map();
+var strokeLocked = false;
+function markStrokeLocked() {
+  strokeLocked = true;
+}
+function clearStrokeLocked() {
+  strokeLocked = false;
+}
+function isStrokeLocked() {
+  return strokeLocked;
+}
+function isElementLike(value) {
+  return typeof value === "object" && value !== null && "parentElement" in value && value.parentElement !== void 0;
+}
+function markGestureConsumed(target, windowMs, upTo) {
+  const until = performance.now() + windowMs;
+  if (!isElementLike(target)) {
+    consumed.set(target, until);
+    return;
+  }
+  let el = target;
+  while (el !== null) {
+    consumed.set(el, until);
+    if (el === upTo) break;
+    el = isElementLike(el.parentElement) ? el.parentElement : null;
+  }
+}
+function consumeIfGestured(event) {
+  const now = performance.now();
+  const target = event.target;
+  if (!isElementLike(target)) {
+    for (const [t, until] of consumed) {
+      if (until <= now) consumed.delete(t);
+    }
+    return false;
+  }
+  let el = target;
+  while (el !== null) {
+    const until = consumed.get(el);
+    if (until !== void 0) {
+      if (until <= now) {
+        consumed.delete(el);
+      } else {
+        return true;
+      }
+    }
+    el = isElementLike(el.parentElement) ? el.parentElement : null;
+  }
+  return false;
+}
+
+// client/mobile/core/reconciler-core.ts
+function createReconcilerCore(options) {
+  const onError = options.onError ?? ((taskName, error, phase) => {
+    console.error(
+      `[dsh-web-mobile] reconciler task ${taskName}${phase === "dispose" ? " dispose" : ""} failed`,
+      error
+    );
+  });
+  const registered = /* @__PURE__ */ new Set();
+  let active = null;
+  let dirty = /* @__PURE__ */ new Set();
+  let forceAll = false;
+  let pending = null;
+  const runEnsure = (task) => {
+    try {
+      task.ensure();
+    } catch (error) {
+      onError(task.name, error, "ensure");
+    }
+  };
+  const runDispose = (task) => {
+    try {
+      task.dispose();
+    } catch (error) {
+      onError(task.name, error, "dispose");
+    }
+  };
+  const flush = () => {
+    if (pending !== null) {
+      pending();
+      pending = null;
+    }
+    if (active === null) {
+      dirty.clear();
+      forceAll = false;
+      return;
+    }
+    if (forceAll) {
+      for (const task of active) runEnsure(task);
+    } else if (dirty.size > 0) {
+      for (const task of active) {
+        const scopes = task.scopes;
+        if (scopes === void 0 || scopes.some((key) => dirty.has(key))) runEnsure(task);
+      }
+    }
+    dirty.clear();
+    forceAll = false;
+  };
+  const schedule = () => {
+    if (pending !== null) return;
+    pending = options.requestFrame(() => {
+      pending = null;
+      flush();
+    });
+  };
+  const register = (task) => {
+    registered.add(task);
+    if (active !== null) {
+      active.add(task);
+      runEnsure(task);
+    }
+    return () => {
+      registered.delete(task);
+      if (active !== null) {
+        active.delete(task);
+        runDispose(task);
+      }
+    };
+  };
+  const activate = () => {
+    if (active !== null) return;
+    active = new Set(registered);
+    forceAll = true;
+    flush();
+  };
+  const deactivate = () => {
+    if (pending !== null) {
+      pending();
+      pending = null;
+    }
+    dirty.clear();
+    forceAll = false;
+    if (active !== null) {
+      const snapshot = active;
+      active = null;
+      for (const task of snapshot) runDispose(task);
+    }
+  };
+  return {
+    get size() {
+      return registered.size;
+    },
+    register,
+    activate,
+    deactivate,
+    note: (keys) => {
+      for (const key of keys) dirty.add(key);
+      schedule();
+    },
+    flush
+  };
+}
+
+// client/mobile/effects/aionui-compat.ts
+function installAionuiCompat(ctx) {
+  installMobileEffect(ctx, "dsh-web-mobile: aionui explorer close marker", () => {
+    const onChevronClick = (event) => {
+      const target = event.target;
+      if (target === null || !target.closest(".aionui-collapse-chevron")) return;
+      getFrame()?.removeAttribute("data-aionui-explorer-open");
+    };
+    document.addEventListener("click", onChevronClick, true);
+    return () => document.removeEventListener("click", onChevronClick, true);
+  });
+  installMobileEffect(ctx, "dsh-web-mobile: preview sheet open marker", () => {
+    const closePreview = () => {
+      getFrame()?.removeAttribute("data-aionui-preview-open");
+      getFrame()?.removeAttribute("data-mobile-preview-full");
+    };
+    const DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+    const DESKTOP_APPVERSION = "5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+    let restoreTimer = null;
+    let spoofed = false;
+    let originalPlatform = navigator.platform;
+    let originalUserAgent = navigator.userAgent;
+    let originalAppVersion = navigator.appVersion;
+    const restoreNavigator = () => {
+      if (restoreTimer !== null) {
+        window.clearTimeout(restoreTimer);
+        restoreTimer = null;
+      }
+      if (!spoofed) return;
+      spoofed = false;
+      Object.defineProperty(navigator, "platform", { value: originalPlatform, configurable: true });
+      Object.defineProperty(navigator, "userAgent", { value: originalUserAgent, configurable: true });
+      Object.defineProperty(navigator, "appVersion", { value: originalAppVersion, configurable: true });
+    };
+    const spoofDesktop = () => {
+      if (!spoofed) {
+        originalPlatform = navigator.platform;
+        originalUserAgent = navigator.userAgent;
+        originalAppVersion = navigator.appVersion;
+        Object.defineProperty(navigator, "platform", { value: "Win32", configurable: true });
+        Object.defineProperty(navigator, "userAgent", { value: DESKTOP_UA, configurable: true });
+        Object.defineProperty(navigator, "appVersion", { value: DESKTOP_APPVERSION, configurable: true });
+        spoofed = true;
+      }
+      if (restoreTimer !== null) window.clearTimeout(restoreTimer);
+      restoreTimer = window.setTimeout(restoreNavigator, 1e3);
+    };
+    const onTap = (event) => {
+      const target = event.target;
+      if (target === null) return;
+      const row = target.closest('[data-aionui-explorer-col] [class*="_treeRow"]');
+      if (row === null) return;
+      if (row.querySelector('[class*="_treeArrow"]:not([class*="_treeArrowEmpty"])') !== null) return;
+      spoofDesktop();
+      getFrame()?.setAttribute("data-aionui-preview-open", "");
+    };
+    const onCollapse = (event) => {
+      const target = event.target;
+      if (target === null) return;
+      if (target.closest('[data-aionui-preview-col] [class*="_panelCollapse"]') !== null) {
+        closePreview();
+      }
+    };
+    document.addEventListener("click", onTap, true);
+    document.addEventListener("click", onCollapse, true);
+    return () => {
+      restoreNavigator();
+      document.removeEventListener("click", onTap, true);
+      document.removeEventListener("click", onCollapse, true);
+    };
+  });
+  installMobileEffect(ctx, "dsh-web-mobile: explorer availability (issue #48)", () => {
+    const narrow = window.matchMedia("(max-width: 1023px)");
+    if (!narrow.matches) return () => {
+    };
+    const check = () => {
+      const has = document.querySelector("[data-aionui-explorer-col]") !== null;
+      getFrame()?.setAttribute("data-mobile-nav-explorer", has ? "1" : "0");
+    };
+    check();
+    const timer = window.setTimeout(check, 1500);
+    const observer = new MutationObserver(check);
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => {
+      window.clearTimeout(timer);
+      observer.disconnect();
+    };
+  });
+}
+function createPreviewCloseTask() {
+  return {
+    name: "preview-close-sync",
+    // Only acts when the suite hides the col via inline style. Deliberately
+    // NOT scoped to data-aionui-preview-open: our own open marker is set
+    // before the suite necessarily flips its inline visibility, so waking on
+    // that marker would read the still-hidden style as a "suite close" and
+    // immediately undo the file-row tap.
+    scopes: ["style"],
+    ensure: () => {
+      const pv = document.querySelector("[data-aionui-preview-col]");
+      if (pv === null) return;
+      if (pv.style.visibility === "hidden") {
+        getFrame()?.removeAttribute("data-aionui-preview-open");
+        getFrame()?.removeAttribute("data-mobile-preview-full");
+      }
+    },
+    dispose: () => {
+    }
+  };
+}
+function createSheetRiseTask() {
+  const cols = ["[data-aionui-explorer-col]", "[data-aionui-preview-col]"];
+  const seen = /* @__PURE__ */ new Map();
+  const play = (el) => {
+    el.animate(
+      [
+        { opacity: 0, transform: "translateY(28px)" },
+        { opacity: 1, transform: "none" }
+      ],
+      { duration: 280, easing: "cubic-bezier(.16, 1, .3, 1)", fill: "backwards" }
+    );
+  };
+  return {
+    name: "sheet-rise-replay",
+    // The flush runs on the next frame, by which time React has rendered the
+    // opened col, so the frame markers / inline style / class changes are
+    // reliable triggers — no '*'.
+    scopes: [
+      "style",
+      "class",
+      "data-aionui-explorer-open",
+      "data-aionui-preview-open",
+      "data-mobile-preview-full"
+    ],
+    ensure: () => {
+      for (const sel of cols) {
+        const el = document.querySelector(sel);
+        if (el === null) continue;
+        const visible = getComputedStyle(el).visibility === "visible";
+        const prev = seen.get(sel) ?? false;
+        if (visible && !prev) play(el);
+        seen.set(sel, visible);
+      }
+    },
+    dispose: () => {
+      seen.clear();
+    }
+  };
+}
+
+// client/mobile/effects/stats-line.ts
+var SEP_SPLIT = /\s*[·．]\s*|(?<![0-9])\.(?![0-9])|(?<!\d)\.(?=\d)/;
+var TTFT_ZH = /^首\s*token\s*平均/;
+var TTFT_EN = /^TTFT\s+avg/i;
+function compactGroup(text, lang) {
+  const trimmed = text.trim();
+  if (trimmed === "") return "";
+  const parts = trimmed.split(SEP_SPLIT).map((part) => part.trim()).filter(Boolean);
+  const zh3 = lang === "zh";
+  if (zh3 ? /[轮步]/.test(trimmed) : /\b(turns|steps)\b/i.test(trimmed)) {
+    if (zh3) return parts.map((part) => part.replace(/\s+/g, "")).join("");
+    return parts.join(" ");
+  }
+  if (zh3 ? /(LLM|工具调用)/.test(trimmed) : /(LLM|Tool call)/i.test(trimmed)) {
+    const mapped = parts.map((part) => {
+      let out = part;
+      if (zh3) out = out.replace(/LLM/, "\u6A21\u578B").replace(/工具调用\s*/, "\u5DE5\u5177");
+      else out = out.replace(/Tool call/i, "Tool");
+      return out.trim();
+    }).filter(Boolean);
+    return mapped.join(" ");
+  }
+  if (zh3 ? /(首\s*token|tok\/s)/.test(trimmed) : /(TTFT|tok\/s)/i.test(trimmed)) {
+    const mapped = parts.filter((part) => !(zh3 ? TTFT_ZH : TTFT_EN).test(part)).map((part) => part.replace(/tok\/s/g, "t/s").trim()).filter(Boolean);
+    return mapped.join(" \xB7 ");
+  }
+  if (zh3 ? /缓存命中/.test(trimmed) : /Cache hit/i.test(trimmed)) {
+    let out = trimmed;
+    if (zh3) out = out.replace(/缓存命中/, "\u7F13\u4E2D");
+    else out = out.replace(/Cache hit/i, "Cache");
+    return out.trim();
+  }
+  if (zh3 ? /(输入|输出|tok)/.test(trimmed) : /(Input|Output|tok)/i.test(trimmed)) {
+    const mapped = parts.map((part) => {
+      let out = part;
+      if (zh3) out = out.replace(/输入\s*/, "\u5165 ").replace(/输出\s*/, "\u51FA");
+      else out = out.replace(/Input/i, "In").replace(/Output/i, "Out");
+      out = out.replace(/\btok\b/g, "t");
+      return out.trim();
+    }).filter(Boolean);
+    return mapped.join(zh3 ? " . " : " \xB7 ");
+  }
+  return trimmed;
+}
+function isStatsGroup(el) {
+  return el.nodeType === 1 && el.tagName === "SPAN" && el.getAttribute("aria-hidden") !== "true";
+}
+function removeStatsGroup(group) {
+  const prev = group.previousSibling;
+  if (prev !== null && prev.nodeType === 3 && /^\s*$/.test(prev.textContent ?? "") && prev.previousSibling !== null && prev.previousSibling.nodeType === 1 && prev.previousSibling.getAttribute("aria-hidden") === "true") {
+    prev.previousSibling.remove();
+    prev.remove();
+    group.remove();
+    return;
+  }
+  const next = group.nextSibling;
+  if (next !== null && next.nodeType === 3 && /^\s*$/.test(next.textContent ?? "") && next.nextSibling !== null && next.nextSibling.nodeType === 1 && next.nextSibling.getAttribute("aria-hidden") === "true") {
+    next.nextSibling.remove();
+    next.remove();
+    group.remove();
+    return;
+  }
+  group.remove();
+}
+function compactStats(stats) {
+  const lang = /[\u4e00-\u9fff]/.test(stats.textContent ?? "") ? "zh" : "en";
+  for (const group of Array.from(stats.children).filter(isStatsGroup)) {
+    const original = group.textContent ?? "";
+    if (original.trim() === "") continue;
+    const compacted = compactGroup(original, lang);
+    if (compacted === "") {
+      removeStatsGroup(group);
+    } else if (compacted !== original) {
+      group.textContent = compacted;
+    }
+  }
+  for (const el of Array.from(stats.children)) {
+    if (el.children.length === 0 && /^TPS\s+\d/.test((el.textContent ?? "").trim())) {
+      const text = el.textContent ?? "";
+      const compacted = text.replace(/tok\/s/g, "t/s");
+      if (compacted !== text) el.textContent = compacted;
+    }
+  }
+}
+function statsAnchorAlive(el) {
+  if (el === null || !el.isConnected) return false;
+  if (el.closest("[data-phase]") === null) return false;
+  return el.closest('[class*="_composerStack"]') !== null;
+}
+function createStatsLineTask() {
+  let tpsOrigin = null;
+  const moveTps = (stats) => {
+    if ([...stats.children].some((c) => /^TPS\s+\d/.test((c.textContent ?? "").trim()))) return;
+    const stack = stats.closest('[class*="_composerStack"]');
+    if (stack === null) return;
+    for (const el of stack.querySelectorAll("div")) {
+      const text = (el.textContent ?? "").trim();
+      if (!/^TPS\s+\d/.test(text)) continue;
+      if (el.children.length > 0) continue;
+      if (el.parentElement !== null) {
+        tpsOrigin = { parent: el.parentElement, next: el.nextSibling };
+      }
+      stats.appendChild(el);
+      return;
+    }
+  };
+  const mark = () => {
+    const anchor = document.querySelector('[data-mobile-nav="stats"]');
+    if (anchor !== null && statsAnchorAlive(anchor)) {
+      moveTps(anchor);
+      return;
+    }
+    anchor?.removeAttribute("data-mobile-nav");
+    for (const root of document.querySelectorAll('[data-phase] [class*="_root"]')) {
+      if (root.closest('[class*="_composerStack"]') === null) continue;
+      if (root.matches('[data-testid="todo-panel"]')) continue;
+      if (root.querySelector("button") !== null) continue;
+      const text = root.textContent ?? "";
+      if (!/(turns|steps|\bLLM\b|轮|步)/.test(text)) continue;
+      if (root.querySelector("textarea, [data-composer-input]") !== null) continue;
+      root.setAttribute("data-mobile-nav", "stats");
+      moveTps(root);
+      compactStats(root);
+      return;
+    }
+  };
+  return {
+    name: "stats-line",
+    scopes: ["*"],
+    ensure: mark,
+    dispose: () => {
+      if (tpsOrigin !== null && tpsOrigin.parent.isConnected) {
+        for (const stats of document.querySelectorAll('[data-mobile-nav="stats"]')) {
+          const tps = [...stats.querySelectorAll("div")].find(
+            (el) => el.children.length === 0 && /^TPS\s+\d/.test((el.textContent ?? "").trim())
+          );
+          if (tps !== void 0) {
+            tpsOrigin.parent.insertBefore(tps, tpsOrigin.next);
+            break;
+          }
+        }
+      }
+      for (const el of document.querySelectorAll('[data-mobile-nav="stats"]')) {
+        el.removeAttribute("data-mobile-nav");
+      }
+      tpsOrigin = null;
+    }
+  };
+}
+
+// client/mobile/effects/preview-fullscreen.ts
+function createPreviewFullscreenTask(t) {
+  let button = null;
+  const syncLabel = (target) => {
+    const full = getFrame()?.hasAttribute("data-mobile-preview-full") ?? false;
+    const label = t(full ? "previewExitFullscreen" : "previewFullscreen");
+    if (target.getAttribute("aria-label") === label) return;
+    target.setAttribute("aria-label", label);
+    target.title = label;
+  };
+  const onClick = () => {
+    getFrame()?.toggleAttribute("data-mobile-preview-full");
+    if (button !== null) syncLabel(button);
+  };
+  return {
+    name: "preview-fullscreen-toggle",
+    scopes: ["data-aionui-preview-open", "data-mobile-preview-full"],
+    ensure: () => {
+      const col = document.querySelector("[data-aionui-preview-col]");
+      if (col === null) return;
+      if (button === null) {
+        button = document.createElement("button");
+        button.type = "button";
+        button.dataset.mobileNav = "preview-full-toggle";
+        button.innerHTML = [
+          '<svg class="dsh-web-mobile-full-in" viewBox="0 0 16 16" fill="none" aria-hidden="true">',
+          '<path d="M6 2H2v4M10 2h4v4M6 14H2v-4M10 14h4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
+          "</svg>",
+          '<svg class="dsh-web-mobile-full-out" viewBox="0 0 16 16" fill="none" aria-hidden="true">',
+          '<path d="M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
+          "</svg>"
+        ].join("");
+        button.addEventListener("click", onClick);
+      }
+      syncLabel(button);
+      if (button.parentElement !== col) col.appendChild(button);
+    },
+    dispose: () => {
+      button?.remove();
+      button = null;
+    }
+  };
+}
+
+// client/mobile/effects/git-chip-reparent.ts
+function createGitChipTask() {
+  return {
+    name: "git-chip-reparent",
+    scopes: ["*"],
+    ensure: () => {
+      const chip = document.querySelector('[data-slot="conversation.input.dock"] [data-gitgraph-chip-anchor]');
+      if (chip === null) return;
+      const card = document.querySelector("[data-composer-input], textarea")?.closest('[class*="_card"]');
+      if (card == null) return;
+      if (chip.parentElement !== card) card.insertBefore(chip, card.firstChild);
+    },
+    dispose: () => {
+      const chip = document.querySelector('[data-slot="conversation.input.dock"] [data-gitgraph-chip-anchor]');
+      const dock = document.querySelector('[data-slot="conversation.input.dock"]');
+      if (chip !== null && dock !== null && chip.parentElement !== dock) dock.appendChild(chip);
+    }
+  };
+}
+
+// client/mobile/effects/settings-toolbar-reparent.ts
+function createSettingsToolbarTask() {
+  let origin = null;
+  return {
+    name: "settings-toolbar-reparent",
+    scopes: ["*"],
+    ensure: () => {
+      const dialog = document.querySelector('[aria-modal="true"]');
+      if (dialog === null) return;
+      const nav = dialog.querySelector(':scope > [class*="_nav"]');
+      const header = dialog.querySelector('[class*="_header"]:not([class*="_headerActions"])');
+      if (nav === null || header === null) return;
+      if (header.parentElement === nav) return;
+      if (header.parentElement !== null) {
+        origin = { parent: header.parentElement, next: header.nextSibling };
+      }
+      nav.appendChild(header);
+    },
+    dispose: () => {
+      if (origin === null) return;
+      const header = document.querySelector('[aria-modal="true"] [class*="_header"]:not([class*="_headerActions"])');
+      if (header !== null && origin.parent.isConnected) {
+        origin.parent.insertBefore(header, origin.next);
+      }
+      origin = null;
+    }
+  };
+}
+
+// client/mobile/effects/overlay-backdrop-fab.ts
+function fadeOverlayOut() {
+  fadeHook?.();
+}
+var fadeHook = null;
+var BACKDROP_FADE_MS = 200;
+function createOverlayTask(t, toggleSidebar) {
+  let backdrop = null;
+  let fab = null;
+  let backdropRemoveTimer = null;
+  let faded = false;
+  const drawerOpen2 = () => {
+    const frame = getFrame();
+    return frame !== null && !frame.hasAttribute("data-sidebar-collapsed");
+  };
+  const heroPhase = () => document.querySelector('[data-phase="active"]') === null;
+  fadeHook = () => {
+    if (backdrop === null) return;
+    faded = true;
+    backdrop.style.pointerEvents = "none";
+    backdrop.style.opacity = "0";
+  };
+  return {
+    name: "overlay-backdrop-fab",
+    scopes: ["*", "data-sidebar-collapsed", "data-phase"],
+    ensure: () => {
+      const frame = getFrame();
+      if (frame === null) return;
+      if (drawerOpen2()) {
+        if (backdrop === null) {
+          backdrop = document.createElement("div");
+          backdrop.dataset.mobileNav = "backdrop";
+          backdrop.setAttribute("role", "button");
+          backdrop.setAttribute("aria-label", t("backdrop"));
+          backdrop.addEventListener("click", toggleSidebar);
+          frame.appendChild(backdrop);
+          faded = false;
+        } else if (faded && backdropRemoveTimer !== null) {
+          window.clearTimeout(backdropRemoveTimer);
+          backdropRemoveTimer = null;
+          faded = false;
+          backdrop.style.removeProperty("pointer-events");
+          backdrop.style.removeProperty("opacity");
+        }
+      } else if (backdrop !== null) {
+        backdrop.style.pointerEvents = "none";
+        backdrop.style.opacity = "0";
+        faded = true;
+        if (backdropRemoveTimer === null) {
+          backdropRemoveTimer = window.setTimeout(() => {
+            backdropRemoveTimer = null;
+            backdrop?.remove();
+            backdrop = null;
+          }, BACKDROP_FADE_MS + 60);
+        }
+      }
+      if (heroPhase() && !drawerOpen2() && fab === null) {
+        fab = document.createElement("button");
+        fab.type = "button";
+        fab.dataset.mobileNav = "fab";
+        fab.setAttribute("aria-label", t("open"));
+        fab.title = t("open");
+        fab.innerHTML = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true" width="18" height="18"><path fill-rule="evenodd" clip-rule="evenodd" d="M9.67272 0.522841C10.8339 0.522841 11.76 0.522714 12.4963 0.602493C13.2453 0.683657 13.8789 0.854248 14.4264 1.25197C14.7504 1.48739 15.0355 1.77247 15.2709 2.0965C15.6686 2.64394 15.8392 3.27758 15.9204 4.02655C16.0002 4.7629 16 5.68895 16 6.85014V9.14986C16 10.3111 16.0002 11.2371 15.9204 11.9735C15.8392 12.7224 15.6686 13.3561 15.2709 13.9035C15.0355 14.2275 14.7504 14.5126 14.4264 14.748C13.8789 15.1458 13.2453 15.3163 12.4963 15.3975C11.76 15.4773 10.8339 15.4772 9.67272 15.4772H6.3273C5.16611 15.4772 4.24006 15.4773 3.50371 15.3975C2.75474 15.3163 2.1211 15.1458 1.57366 14.748C1.24963 14.5126 0.964549 14.2275 0.729131 13.9035C0.331407 13.3561 0.160817 12.7224 0.0796529 11.9735C-0.000126137 11.2371 1.25338e-09 10.3111 1.25338e-09 9.14986V6.85014C1.25329e-09 5.68895 -0.000126137 4.7629 0.0796529 4.02655C0.160817 3.27758 0.331407 2.64394 0.729131 2.0965C0.964549 1.77247 1.24963 1.48739 1.57366 1.25197C2.1211 0.854248 2.75474 0.683657 3.50371 0.602493C4.24006 0.522714 5.16611 0.522841 6.3273 0.522841H9.67272ZM5.54303 1.88715V14.1118C5.78636 14.1128 6.04709 14.1169 6.3273 14.1169H9.67272C10.8639 14.1169 11.7032 14.1164 12.3493 14.0465C12.9824 13.9779 13.3497 13.8494 13.6268 13.6482C13.8354 13.4966 14.0195 13.3125 14.1711 13.1039C14.3723 12.8268 14.5007 12.4595 14.5693 11.8264C14.6393 11.1803 14.6398 10.341 14.6398 9.14986V6.85014C14.6398 5.65896 14.6393 4.81967 14.5693 4.1736C14.5007 3.54048 14.3723 3.17318 14.1711 2.89609C14.0195 2.68747 13.8354 2.50337 13.6268 2.35179C13.3497 2.1506 12.9824 2.02212 12.3493 1.95353C11.7032 1.88358 10.8639 1.88307 9.67272 1.88307H6.3273C6.04709 1.88307 5.78636 1.8862 5.54303 1.88715ZM4.1828 1.91166C3.99125 1.9216 3.8148 1.93577 3.65076 1.95353C3.01764 2.02212 2.65034 2.1506 2.37325 2.35179C2.16463 2.50337 1.98052 2.68747 1.82895 2.89609C1.62776 3.17318 1.49928 3.54048 1.43069 4.1736C1.36074 4.81967 1.36023 5.65896 1.36023 6.85014V9.14986C1.36023 10.341 1.36074 11.1803 1.43069 11.8264C1.49928 12.4595 1.62776 12.8268 1.82895 13.1039C1.98052 13.3125 2.16463 13.4966 2.37325 13.6482C2.65034 13.8494 3.01764 13.9779 3.65076 14.0465C4.29683 14.1164 5.13612 14.1169 6.3273 14.1169H9.67272C10.8639 14.1169 11.7032 14.1164 12.3493 14.0465C12.9824 13.9779 13.3497 13.8494 13.6268 13.6482C13.8354 13.4966 14.0195 13.3125 14.1711 13.1039C14.3723 12.8268 14.5007 12.4595 14.5693 11.8264C14.6393 11.1803 14.6398 10.341 14.6398 9.14986V6.85014C14.6398 5.65896 14.6393 4.81967 14.5693 4.1736C14.5007 3.54048 14.3723 3.17318 14.1711 2.89609C14.0195 2.68747 13.8354 2.50337 13.6268 2.35179C13.3497 2.1506 12.9824 2.02212 12.3493 1.95353C11.7032 1.88358 10.8639 1.88307 9.67272 1.88307H6.3273C5.13612 1.88307 4.29683 1.88358 3.65076 1.95353C3.47672 1.97129 3.30027 1.98546 3.10872 1.9954L4.1828 1.91166Z" fill="currentColor"/></svg>';
+        fab.addEventListener("click", toggleSidebar);
+        frame.appendChild(fab);
+      } else if ((!heroPhase() || drawerOpen2()) && fab !== null) {
+        fab.remove();
+        fab = null;
+      }
+    },
+    dispose: () => {
+      if (backdropRemoveTimer !== null) {
+        window.clearTimeout(backdropRemoveTimer);
+        backdropRemoveTimer = null;
+      }
+      fadeHook = null;
+      backdrop?.remove();
+      backdrop = null;
+      fab?.remove();
+      fab = null;
+    }
+  };
+}
+
+// client/mobile/effects/file-viewer-compat.ts
+function createFileViewerMarkerTask() {
+  return {
+    name: "file-viewer-open-marker",
+    scopes: ["*"],
+    ensure: () => {
+      const frame = getFrame();
+      if (frame === null) return;
+      const active = document.querySelector(".dsfv-panel") !== null;
+      if (active) {
+        frame.setAttribute("data-file-viewer-open", "");
+      } else if (frame.hasAttribute("data-file-viewer-open")) {
+        frame.removeAttribute("data-file-viewer-open");
+      }
+    },
+    dispose: () => {
+      getFrame()?.removeAttribute("data-file-viewer-open");
+    }
+  };
+}
+
+// client/mobile/effects/phone-chrome.ts
+var NS = "mobileNav";
+var MOBILE_QUERY = "(max-width: 1023px) and (pointer: coarse)";
+var DESKTOP_QUERY = "(min-width: 1024px)";
+var TOUCH_QUERY = "(pointer: coarse)";
+function installMobileEffect(ctx, label, install, query = MOBILE_QUERY) {
+  ctx.effect(() => {
+    const narrow = window.matchMedia(query);
+    let cleanup;
+    const arm = () => {
+      cleanup?.();
+      cleanup = narrow.matches ? install(narrow) : void 0;
+    };
+    arm();
+    narrow.addEventListener("change", arm);
+    return () => {
+      narrow.removeEventListener("change", arm);
+      cleanup?.();
+    };
+  }, label);
+}
+function findFrame() {
+  return document.querySelector("[data-shell-overlay]")?.parentElement ?? null;
+}
+function getFrame() {
+  return document.querySelector('[data-mobile-nav="frame"]') ?? findFrame();
+}
+function installFrameController() {
+  if (frameControllerInstalled) return () => {
+  };
+  frameControllerInstalled = true;
+  let frame = null;
+  const removeTask = addReconcilerTask({
+    name: "frame-marker",
+    scopes: ["*"],
+    ensure: () => {
+      frame = findFrame();
+      if (frame !== null && !frame.hasAttribute("data-mobile-nav")) {
+        frame.setAttribute("data-mobile-nav", "frame");
+      }
+    },
+    dispose: () => {
+      if (frame !== null) {
+        frame.removeAttribute("data-mobile-nav");
+        frame.removeAttribute("data-mobile-preview-full");
+        frame.removeAttribute("data-aionui-explorer-open");
+        frame.removeAttribute("data-aionui-preview-open");
+      }
+      frame = null;
+    }
+  });
+  return () => {
+    removeTask();
+    frameControllerInstalled = false;
+  };
+}
+var frameControllerInstalled = false;
+var reconcileTasksRegistered = false;
+var reconcilerInstalled = false;
+var core = createReconcilerCore({
+  requestFrame: (flush) => {
+    let id = 0;
+    const run = () => {
+      id = 0;
+      flush();
+    };
+    id = requestAnimationFrame(run);
+    return () => {
+      if (id !== 0) cancelAnimationFrame(id);
+    };
+  }
+});
+function installReconciler(ctx) {
+  if (reconcilerInstalled) return () => {
+  };
+  reconcilerInstalled = true;
+  installMobileEffect(ctx, "dsh-web-mobile: DOM reconciler", () => {
+    const observer = new MutationObserver((records) => {
+      const keys = /* @__PURE__ */ new Set();
+      for (const record of records) {
+        keys.add(
+          record.type === "attributes" && record.attributeName !== null ? record.attributeName : "*"
+        );
+      }
+      core.note(keys);
+    });
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: [
+        "style",
+        "class",
+        "data-phase",
+        "data-sidebar-collapsed",
+        "data-aionui-explorer-open",
+        "data-aionui-preview-open",
+        "data-mobile-preview-full"
+      ]
+    });
+    core.activate();
+    return () => {
+      observer.disconnect();
+      core.deactivate();
+    };
+  });
+  return () => {
+    reconcilerInstalled = false;
+  };
+}
+function addReconcilerTask(task) {
+  return core.register(task);
+}
+function detectIosWebKit(nav, supports) {
+  if (supports !== null) {
+    try {
+      if (supports("(font: -apple-system-body) and (-webkit-touch-callout: none)")) return true;
+    } catch {
+    }
+  }
+  const ua = nav.userAgent;
+  if (/iP(hone|ad|od)/.test(ua)) return true;
+  return /Macintosh/.test(ua) && nav.maxTouchPoints > 1;
+}
+var IOS_MARKER = "data-mobile-nav-ios";
+var VIEWPORT_CONTENT = "width=device-width, initial-scale=1, viewport-fit=cover";
+var findViewportMeta = () => document.querySelector('meta[name="viewport"]');
+function installPhoneChrome(ctx) {
+  installMobileEffect(ctx, "dsh-web-mobile: status bar theme + viewport + zoom guard", () => {
+    const themeMeta = document.createElement("meta");
+    themeMeta.name = "theme-color";
+    const bodyBg = () => getComputedStyle(document.body).backgroundColor;
+    const root = document.documentElement;
+    let originalViewport = null;
+    let observedMeta = null;
+    let applying = false;
+    const assertViewport = () => {
+      const viewport = findViewportMeta();
+      if (viewport === null) return;
+      if (originalViewport === null) originalViewport = viewport.content;
+      if (applying || viewport.content === VIEWPORT_CONTENT) return;
+      applying = true;
+      viewport.content = VIEWPORT_CONTENT;
+      applying = false;
+    };
+    const metaObserver = new MutationObserver(assertViewport);
+    const attachMetaObserver = () => {
+      const viewport = findViewportMeta();
+      if (viewport === observedMeta) return;
+      if (observedMeta !== null) metaObserver.disconnect();
+      observedMeta = viewport;
+      if (viewport !== null) {
+        metaObserver.observe(viewport, { attributes: true, attributeFilter: ["content"] });
+      }
+    };
+    const headObserver = new MutationObserver(() => {
+      attachMetaObserver();
+      assertViewport();
+    });
+    headObserver.observe(document.head, { childList: true });
+    attachMetaObserver();
+    assertViewport();
+    const observer = new MutationObserver(() => {
+      themeMeta.content = bodyBg();
+    });
+    observer.observe(document.body, { attributes: true, attributeFilter: ["data-ds-dark-theme"] });
+    const cssSupports = typeof CSS !== "undefined" && typeof CSS.supports === "function" ? (condition) => CSS.supports(condition) : null;
+    if (detectIosWebKit(navigator, cssSupports)) root.setAttribute(IOS_MARKER, "");
+    themeMeta.content = bodyBg();
+    if (themeMeta.parentElement === null) document.head.appendChild(themeMeta);
+    return () => {
+      metaObserver.disconnect();
+      headObserver.disconnect();
+      observer.disconnect();
+      const viewport = findViewportMeta();
+      if (viewport !== null && originalViewport !== null && viewport.content === VIEWPORT_CONTENT) {
+        viewport.content = originalViewport;
+      }
+      themeMeta.remove();
+      root.removeAttribute(IOS_MARKER);
+    };
+  });
+}
+function installOverlayInteractions(ctx) {
+  installMobileEffect(ctx, "dsh-web-mobile: drawer close (Escape + navigate)", () => {
+    const toggleSidebar = () => ctx.layout.toggleSidebar();
+    const drawerOpen2 = () => {
+      const frame = getFrame();
+      return frame !== null && !frame.hasAttribute("data-sidebar-collapsed");
+    };
+    const onKeyDown = (event) => {
+      if (event.key !== "Escape") return;
+      if (document.querySelector('[aria-modal="true"]') !== null) return;
+      if (drawerOpen2()) toggleSidebar();
+    };
+    const drawerRoot = () => document.querySelector('[data-mobile-nav="frame"] > :first-child');
+    const shouldCloseOnTapInsideDrawer = (target) => {
+      if (document.querySelector('[aria-modal="true"]') !== null) return false;
+      if (!drawerOpen2()) return false;
+      if (!(target instanceof Element)) return false;
+      const drawer = drawerRoot();
+      if (drawer === null || !drawer.contains(target)) return false;
+      if (target.closest('[class*="sessionRow"] button') !== null) return false;
+      return target.closest(
+        'button[data-dsh-taskboard-entry], button[data-dsh-ssh-entry], [class*="newSession"], [class*="sessionRow"], [class*="searchResultRow"], [class*="searchResultWorkspace"], [class*="usg_"]'
+      ) !== null;
+    };
+    let lastTouchNavAt = 0;
+    let navSignatureAtArm = "";
+    let navObserver = null;
+    let navTimer = null;
+    const selectedRowSignature = () => {
+      const selected = drawerRoot()?.querySelector('[role="treeitem"][aria-selected="true"]');
+      const title = selected?.querySelector('[class*="_title"]');
+      return title?.textContent?.trim() ?? null;
+    };
+    const disarmNav = () => {
+      navObserver?.disconnect();
+      navObserver = null;
+      if (navTimer !== null) window.clearTimeout(navTimer);
+      navTimer = null;
+      navSignatureAtArm = "";
+    };
+    const armNav = () => {
+      disarmNav();
+      navSignatureAtArm = selectedRowSignature() ?? "";
+      const root = drawerRoot();
+      if (root === null) return;
+      navObserver = new MutationObserver(() => {
+        if (!drawerOpen2()) {
+          disarmNav();
+          return;
+        }
+        const signature = selectedRowSignature();
+        if (signature !== null && signature !== navSignatureAtArm) {
+          disarmNav();
+          toggleSidebar();
+        }
+      });
+      navObserver.observe(root, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["aria-selected"]
+      });
+      navTimer = window.setTimeout(disarmNav, 2e3);
+    };
+    const onDrawerClick = (event) => {
+      if (isStrokeLocked() || consumeIfGestured(event)) return;
+      if (performance.now() - lastTouchNavAt < 500) return;
+      if (shouldCloseOnTapInsideDrawer(event.target)) toggleSidebar();
+    };
+    const onDrawerPointerUp = (event) => {
+      if (isStrokeLocked() || consumeIfGestured(event)) return;
+      if (event.pointerType !== "touch" && event.pointerType !== "pen") return;
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (!shouldCloseOnTapInsideDrawer(target)) return;
+      const row = target.closest('[role="treeitem"]');
+      if (row !== null) {
+        lastTouchNavAt = performance.now();
+        if (row.getAttribute("aria-selected") === "true") {
+          toggleSidebar();
+        } else {
+          armNav();
+        }
+        return;
+      }
+      toggleSidebar();
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    document.addEventListener("click", onDrawerClick, true);
+    document.addEventListener("pointerup", onDrawerPointerUp, true);
+    return () => {
+      disarmNav();
+      document.removeEventListener("keydown", onKeyDown, true);
+      document.removeEventListener("click", onDrawerClick, true);
+      document.removeEventListener("pointerup", onDrawerPointerUp, true);
+    };
+  });
+}
+function registerReconcileTasks(ctx) {
+  if (reconcileTasksRegistered) return () => {
+  };
+  reconcileTasksRegistered = true;
+  const t = ctx.locale.bind(NS);
+  const removeTasks = [
+    addReconcilerTask(createPreviewFullscreenTask(t)),
+    addReconcilerTask(createGitChipTask()),
+    addReconcilerTask(createSettingsToolbarTask()),
+    addReconcilerTask(createPreviewCloseTask()),
+    addReconcilerTask(createSheetRiseTask()),
+    addReconcilerTask(createStatsLineTask()),
+    addReconcilerTask(createOverlayTask(t, () => ctx.layout.toggleSidebar())),
+    addReconcilerTask(createFileViewerMarkerTask())
+  ];
+  return () => {
+    for (const remove of removeTasks) remove();
+    reconcileTasksRegistered = false;
+  };
+}
+
 // client/mobile/effects/sidebar-swipe.ts
 var START_ZONE_RATIO = 0.45;
 function startZonePxFor(viewportWidthPx, ratio = START_ZONE_RATIO) {
@@ -4725,8 +4697,7 @@ function apply(ctx) {
       // The component's internal id is a plain string (slot runtime typing);
       // the host-generation brand boundary lives here and only here, hence
       // the double assertion (string and Branded<'SessionId'> do not overlap).
-      downloadSessionLog: (sessionId) => ctx.sessionLogDownload.download(sessionId),
-      toggleSidebar: () => ctx.layout.toggleSidebar()
+      downloadSessionLog: (sessionId) => ctx.sessionLogDownload.download(sessionId)
     })
   }, MobileDrawerFooter));
 }

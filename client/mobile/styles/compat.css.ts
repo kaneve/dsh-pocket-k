@@ -42,6 +42,16 @@ export const COMPAT_CSS = `@media (max-width: 1023px) and (pointer: coarse) {
   [data-mobile-nav-explorer="0"] [data-mobile-nav="explorer"] {
     display: none !important;
   }
+  /* ---------- 宿主「打开方式」下拉（Explorer / Git Bash / VS Code …） ----------
+     该控件由 @deepseek-ai/dsh-client-ui-open-in-app 注册进
+     conversation.session.header.utilities（split 主按钮 + chevron 下拉），是桌面
+     上「把项目在本地应用里打开」的入口，手机上用不到还挤占会话头部 —— 按 slot
+     精确定位后整块隐藏（不隐藏整个 slot：session-log-export 等也注册在这里）。
+     class 是 CSS Module 哈希，_split 是它的模块键名；该 slot 内只有这个控件用
+     split 结构（deliverables / trajectory 的 split 不在此 slot）。 */
+  [data-mobile-nav="frame"] [data-slot="conversation.session.header.utilities"] div[class*="_split"] {
+    display: none !important;
+  }
   /* Explorer (file tree) bottom sheet: bottom edge aligned exactly with
      the composer card's bottom line — the card sits 36px above the
      viewport bottom (8px composer padding + the 28px stats strip below
